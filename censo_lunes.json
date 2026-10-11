@@ -1,0 +1,20 @@
+{
+  "archivo_salida": "Censo_2026-10-12.xlsx",
+  "metadatos": {
+    "fecha": "2026-10-12",
+    "dia": "lunes",
+    "ubicacion": "Av. San Martín y Belgrano",
+    "turno": "Tarde",
+    "lugar": "Centro"
+  },
+  "hora_inicio": "15:00",
+  "duracion_horas": 4,
+  "tipos_vehiculo": ["Autos", "Motos", "Veh. Pesados", "TUP"],
+  "movimientos": [
+    {"calle": "Av. San Martín", "sentido": "Norte-Sur", "nro_mov": 1},
+    {"calle": "Av. San Martín", "sentido": "Norte-Sur", "nro_mov": 2},
+    {"calle": "Belgrano",       "sentido": "Este-Oeste", "nro_mov": 3},
+    {"calle": "Belgrano",       "sentido": "Este-Oeste", "nro_mov": 4}
+  ],
+  "tipos_excluidos_hora_pico": ["Bicicletas", "Peatones"]
+}
