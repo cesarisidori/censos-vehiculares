@@ -108,34 +108,6 @@ def _df_a_tabla(df, index_nombre="Tipo", encabezados=None):
     return encabezados, filas
 
 
-def _columnas_con_grupos(df):
-    """
-    Devuelve (encabezados_planos, grupos) de un df (posible MultiIndex).
-
-    - Encabezados: ('Calle | Sentido', 'M1') → 'Calle | Sentido | M1'.
-    - Grupos: id de grupo por columna (nivel 0 del MultiIndex), para
-      separarlos visualmente. Si las columnas no son MultiIndex → None.
-    """
-    encabezados = _aplanar_columnas(df.columns)
-    if getattr(df.columns, "nlevels", 1) < 2:
-        return encabezados, None
-    grupos = [str(col[0]).strip() if len(col) else "" for col in df.columns]
-    return encabezados, grupos
-
-
-def _rangos_grupos(grupos):
-    """Lista de grupos → [(col_ini, col_fin), ...] (columnas 1..n)."""
-    rangos = []
-    actual, inicio = None, None
-    for j, g in enumerate(grupos, start=1):
-        if g != actual:
-            if actual is not None:
-                rangos.append((inicio, j - 1))
-            actual, inicio = g, j
-    if inicio is not None:
-        rangos.append((inicio, len(grupos)))
-    return rangos
-
 
 def _anchos_proporcionales(encabezados, filas, ancho_util, familia="Helvetica",
                            fuente=7, minima_cm=0.6):
@@ -242,14 +214,14 @@ def _registrar_fuentes_pdf():
 
 
 def _tabla_pdf(datos, col_widths=None, fuente=8, familia="Helvetica",
-               encabezado=False, grupos=None):
+               encabezado=False, resaltar_total=False):
     """
     Tabla de reportlab con estilos acordes al reporte.
 
     - Si `encabezado`, la primera fila se convierte en Paragraph para que
       los títulos largos se envuelvan en vez de pisarse entre columnas.
-    - Si se pasa `grupos` (id por columna), aplica banding alternado por
-      grupo y un borde vertical más marcado al cierre de cada grupo.
+    - Si `resaltar_total`, la última columna (Total) de las filas de datos
+      se sombrea en #D6E4F0 (el resto de los datos, en blanco).
     """
     from reportlab.lib import colors
     from reportlab.lib.styles import ParagraphStyle
@@ -282,34 +254,187 @@ def _tabla_pdf(datos, col_widths=None, fuente=8, familia="Helvetica",
     if encabezado:
         estilo += [
             ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8eef7")),
-            ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#f5f7fa")),
         ]
     else:
         estilo += [
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#f5f7fa")),
         ]
 
-    # Banding por grupos (filas de datos; el encabezado ya tiene su color)
-    if grupos:
-        fila_ini = 1 if encabezado else 0
-        for k, (j0, j1) in enumerate(_rangos_grupos(grupos)):
-            if k % 2 == 1:
-                estilo.append(("BACKGROUND", (j0, fila_ini), (j1, -1),
-                               colors.HexColor("#eef3fa")))
-            estilo.append(("LINEAFTER", (j1, 0), (j1, -1),
-                           1.0, colors.HexColor("#8a9bb5")))
+    # Última columna (Total) sombreada; el resto de los datos, en blanco
+    if resaltar_total and len(datos[0]) > 1:
+        j = len(datos[0]) - 1
+        estilo.append(("BACKGROUND", (j, 1 if encabezado else 0), (j, -1),
+                       colors.HexColor("#d6e4f0")))
 
     tabla.setStyle(TableStyle(estilo))
     return tabla
 
 
+def _tabla_pdf_multinivel(columnas, filas, enc_nivel2, col_widths,
+                          fuente=7, familia="Helvetica"):
+    """
+    Tabla con encabezado de 2 filas y SPAN (igual que la app de Streamlit):
+
+    - Fila 1: 'Tipo' (ocupa 2 filas) + una celda fusionada por grupo
+      ('Calle | Sentido', …; la columna total general, su propio grupo).
+    - Fila 2: cada movimiento (M1…, Total); celdas vacías bajo 'Tipo' y
+      bajo la columna total general.
+    - Datos en blanco; columna 'Total' de cada grupo en #E8EEF7 y la
+      Total general en #D6E4F0. repeatRows=2 si la tabla se parte.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Paragraph, Table, TableStyle
+
+    negrita = "Helvetica-Bold" if familia == "Helvetica" else "DejaVu-Bold"
+    estilo0 = ParagraphStyle("EncN0", fontName=negrita, fontSize=fuente,
+                             leading=fuente + 1.5, alignment=1)
+    estilo1 = ParagraphStyle("EncN1", fontName=negrita,
+                             fontSize=max(fuente - 1, 5),
+                             leading=fuente + 1, alignment=1)
+
+    # ── Encabezado: fila 1 (grupos fusionados) y fila 2 (movimientos) ──
+    fila0 = [Paragraph("Tipo", estilo0)]
+    fila1 = [Paragraph("", estilo1)]
+    spans = [("SPAN", (0, 0), (0, 1))]
+    totales_grupo, total_general = [], None
+    i = 0
+    while i < len(columnas):
+        col = columnas[i]
+        grupo = (str(col[0]).strip() if isinstance(col, tuple)
+                 else str(col).strip())
+        j = i
+        while j + 1 < len(columnas):
+            c2 = columnas[j + 1]
+            g2 = (str(c2[0]).strip() if isinstance(c2, tuple)
+                  else str(c2).strip())
+            if g2 != grupo:
+                break
+            j += 1
+        # El grupo va en la celda ancla del span; el resto de las columnas
+        # cubiertas se rellena para que la fila tenga una celda por columna
+        # (reportlab espera filas del mismo largo que la tabla).
+        fila0.append(Paragraph(escape(grupo), estilo0))
+        fila0.extend([""] * (j - i))
+        if j > i:
+            spans.append(("SPAN", (1 + i, 0), (1 + j, 0)))
+        for k in range(i, j + 1):
+            fila1.append(Paragraph(escape(str(enc_nivel2[1 + k])), estilo1))
+        i = j + 1
+
+    # ── Columnas Total (índice de tabla = 1 + posición en `columnas`) ──
+    for k, col in enumerate(columnas):
+        if not isinstance(col, tuple):
+            continue
+        n0 = str(col[0]).strip().lower()
+        n1 = str(col[1]).strip().lower() if len(col) > 1 else ""
+        if n0 == "total":
+            total_general = 1 + k
+        elif n1 == "total":
+            totales_grupo.append(1 + k)
+
+    datos = [fila0, fila1] + [list(f) for f in filas]
+    tabla = Table(datos, colWidths=col_widths, repeatRows=2)
+    estilo = [
+        ("FONTNAME", (0, 2), (-1, -1), familia),
+        ("FONTSIZE", (0, 2), (-1, -1), fuente),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c0c0c0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 3),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("BACKGROUND", (0, 0), (-1, 1), colors.HexColor("#e8eef7")),
+    ]
+    estilo += spans
+    for j in totales_grupo:
+        estilo.append(("BACKGROUND", (j, 2), (j, -1),
+                       colors.HexColor("#e8eef7")))
+    if total_general is not None:
+        estilo.append(("BACKGROUND", (total_general, 2), (total_general, -1),
+                       colors.HexColor("#d6e4f0")))
+    tabla.setStyle(TableStyle(estilo))
+    return tabla
+
+
+def _historia_imagenes(con_imagenes, ancho_util, negrita):
+    """
+    Flowables de gráficos para el PDF:
+
+    - De a 2 imágenes por fila, con el título ARRIBA de cada una (mismo
+      estilo que los títulos de sección); fluyen las que quepan en página.
+    - Las imágenes 'solas' (croquis, o más altas que anchas ×1.15) van a
+      ancho completo con página propia (KeepTogether + PageBreak).
+    """
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import (Image, KeepTogether, PageBreak,
+                                    Paragraph, Spacer, Table, TableStyle)
+
+    estilo_titulo = ParagraphStyle("TituloGrafico", fontName=negrita,
+                                   fontSize=10, leading=12)
+
+    # Clasificar: sola o emparejable
+    items = []
+    for titulo, png in con_imagenes:
+        w, h = _png_dims(png)
+        solo = ("croquis" in titulo.lower()) or (h / max(w, 1) > 1.15)
+        items.append((titulo, png, w, h, solo))
+
+    flujables = []
+    k = 0
+    while k < len(items):
+        titulo, png, w, h, solo = items[k]
+
+        if solo:
+            esc = min(ancho_util / w, 23 * cm / h)
+            flujables.append(KeepTogether([
+                Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
+                Image(io.BytesIO(png), width=w * esc, height=h * esc),
+            ]))
+            k += 1
+            if k < len(items):
+                flujables.append(PageBreak())
+            continue
+
+        pareja = (items[k + 1] if k + 1 < len(items) and not items[k + 1][4]
+                  else None)
+        ancho_col = (ancho_util - 0.3 * cm) / 2 if pareja else ancho_util
+
+        pendientes = [(titulo, png, w, h)]
+        if pareja:
+            pendientes.append(pareja[:4])
+
+        titulos, imgs = [], []
+        for t, p, iw, ih in pendientes:
+            esc = ancho_col / iw
+            titulos.append(Paragraph(escape(_sin_emoji(t)), estilo_titulo))
+            imgs.append(Image(io.BytesIO(p), width=ancho_col, height=ih * esc))
+
+        tabla = Table([titulos, imgs], colWidths=[ancho_col] * len(imgs))
+        tabla.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 3),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+            ("TOPPADDING", (0, 0), (-1, -1), 2),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        flujables.append(KeepTogether([tabla]))
+        flujables.append(Spacer(1, 6))
+        k += 2 if pareja else 1
+
+    return flujables
+
+
 def generar_pdf(ctx):
-    """Genera el reporte PDF y devuelve bytes."""
+    """Genera el reporte PDF (orientación mixta) y devuelve bytes."""
     from reportlab.lib.enums import TA_CENTER
-    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib.pagesizes import A4, landscape, portrait
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
     from reportlab.lib.units import cm
-    from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer
+    from reportlab.platypus import (BaseDocTemplate, Frame, NextPageTemplate,
+                                    PageBreak, PageTemplate, Paragraph,
+                                    Spacer)
 
     familia = _registrar_fuentes_pdf()
     negrita = "DejaVu-Bold" if familia == "DejaVu" else "Helvetica-Bold"
@@ -321,17 +446,30 @@ def generar_pdf(ctx):
                             fontName=familia, fontSize=11, alignment=TA_CENTER)
     h2 = ParagraphStyle("RepH2", parent=estilos["Heading2"], fontName=negrita,
                         fontSize=12, spaceBefore=12, spaceAfter=4)
-    h3 = ParagraphStyle("RepH3", parent=estilos["Heading3"], fontName=negrita,
-                        fontSize=10, spaceBefore=8, spaceAfter=2)
 
+    # ── Documento con dos plantillas: vertical y horizontal ──
     buf = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buf, pagesize=landscape(A4),
-        leftMargin=1.5 * cm, rightMargin=1.5 * cm,
-        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+    m = 1.5 * cm
+    ancho_v, alto_v = portrait(A4)
+    ancho_h, alto_h = landscape(A4)
+    doc = BaseDocTemplate(
+        buf, pagesize=portrait(A4),
+        leftMargin=m, rightMargin=m, topMargin=m, bottomMargin=m,
         title=str(ctx.get("titulo") or "Reporte de censo"),
     )
-    ancho_util = doc.width
+    doc.addPageTemplates([
+        PageTemplate(id="vertical",
+                     frames=[Frame(m, m, ancho_v - 2 * m, alto_v - 2 * m,
+                                   id="frame_v")],
+                     pagesize=portrait(A4)),
+        PageTemplate(id="horizontal",
+                     frames=[Frame(m, m, ancho_h - 2 * m, alto_h - 2 * m,
+                                   id="frame_h")],
+                     pagesize=landscape(A4)),
+    ])
+    ancho_util = ancho_v - 2 * m        # usable vertical (texto, fichas…)
+    ancho_util_h = ancho_h - 2 * m      # usable horizontal (tablas anchas)
+    plantilla = "vertical"              # plantilla activa
     story = []
 
     # ── Encabezado ──
@@ -354,25 +492,36 @@ def generar_pdf(ctx):
     story.append(_tabla_pdf(fhp, col_widths=[5 * cm, 8 * cm],
                             fuente=9, familia=familia))
 
-    # ── Resumen agrupado (si hay MAPA) ──
+    # ── Resumen agrupado — horizontal, encabezado multinivel ──
     resumen_agr = ctx.get("resumen_agr")
     if resumen_agr is not None:
+        if plantilla != "horizontal":
+            story.append(NextPageTemplate("horizontal"))
+            plantilla = "horizontal"
+            story.append(PageBreak())
         story.append(Paragraph("Resumen hora pico (agrupado)", h2))
-        enc_planos, grupos = _columnas_con_grupos(resumen_agr)
-        enc, filas = _df_a_tabla(resumen_agr, encabezados=enc_planos)
-        fuente_res = 6.5 if len(enc) <= 14 else 5.0
-        story.append(_tabla_pdf(
-            [enc] + filas,
-            col_widths=_anchos_proporcionales(enc, filas, ancho_util,
-                                              familia=familia,
-                                              fuente=fuente_res),
-            fuente=fuente_res,
-            familia=familia, encabezado=True, grupos=grupos,
+        columnas = list(resumen_agr.columns)
+        filas = [[str(idx)] + [_fmt(v) for v in fila]
+                 for idx, fila in resumen_agr.iterrows()]
+        enc_nivel2 = ["Tipo"] + [
+            (str(c[1]).strip() if isinstance(c, tuple) and len(c) > 1 else "")
+            for c in columnas
+        ]
+        story.append(_tabla_pdf_multinivel(
+            columnas=columnas, filas=filas, enc_nivel2=enc_nivel2,
+            col_widths=_anchos_proporcionales(enc_nivel2, filas,
+                                              ancho_util_h,
+                                              familia=familia, fuente=7),
+            fuente=7, familia=familia,
         ))
 
-    # ── % pesados (si aplica) ──
+    # ── % pesados (si aplica) — vertical ──
     pesados_hp = ctx.get("pesados_hp")
     if pesados_hp is not None:
+        if plantilla != "vertical":
+            story.append(NextPageTemplate("vertical"))
+            plantilla = "vertical"
+            story.append(PageBreak())
         story.append(Paragraph("% de vehículos pesados — hora pico", h2))
         enc, filas = _df_a_tabla(pesados_hp, index_nombre="tipo_vehiculo")
         story.append(_tabla_pdf(
@@ -380,35 +529,38 @@ def generar_pdf(ctx):
             col_widths=_anchos_proporcionales(enc, filas, ancho_util,
                                               familia=familia, fuente=6.5),
             fuente=6.5, familia=familia, encabezado=True,
+            resaltar_total=True,
         ))
 
-    # ── Totales 15 min ──
+    # ── Totales 15 min — horizontal ──
     totales = ctx.get("totales")
     if totales is not None:
+        if plantilla != "horizontal":
+            story.append(NextPageTemplate("horizontal"))
+            plantilla = "horizontal"
+            story.append(PageBreak())
         story.append(Paragraph("Totales por bloque de 15 min", h2))
         enc, filas = _df_a_tabla(totales, index_nombre="#")
         fuente_tot = 7 if len(enc) <= 16 else 6
         story.append(_tabla_pdf(
             [enc] + filas,
-            col_widths=_anchos_proporcionales(enc, filas, ancho_util,
+            col_widths=_anchos_proporcionales(enc, filas, ancho_util_h,
                                               familia=familia,
                                               fuente=fuente_tot),
             fuente=fuente_tot,
             familia=familia, encabezado=True,
+            resaltar_total=True,
         ))
 
-    # ── Gráficos ──
+    # ── Gráficos — vertical, de a 2 por fila (títulos arriba) ──
     con_imagenes = [(t, png) for t, png in ctx.get("imagenes", []) if png]
     if con_imagenes:
+        if plantilla != "vertical":
+            story.append(NextPageTemplate("vertical"))
+            plantilla = "vertical"
+            story.append(PageBreak())
         story.append(Paragraph("Gráficos", h2))
-    alto_max = 15 * cm
-    for titulo, png in con_imagenes:
-        story.append(Paragraph(escape(_sin_emoji(titulo)), h3))
-        w_px, h_px = _png_dims(png)
-        escala = min(ancho_util / w_px, alto_max / h_px)
-        story.append(Image(io.BytesIO(png),
-                           width=w_px * escala, height=h_px * escala))
-        story.append(Spacer(1, 6))
+        story += _historia_imagenes(con_imagenes, ancho_util, negrita)
 
     doc.build(story)
     return buf.getvalue()
@@ -430,12 +582,12 @@ def _sombrear_celda(celda, color_hex):
     tc_pr.append(sombra)
 
 
-def _tabla_docx(doc, encabezados, filas, fuente_pt=8, grupos=None):
+def _tabla_docx(doc, encabezados, filas, fuente_pt=8, resaltar_total=False):
     """
     Agrega una tabla estilo 'Table Grid' con fuente Arial controlada.
 
-    Si se pasa `grupos` (id por columna), aplica banding alternado por
-    grupo igual que en el PDF.
+    Si `resaltar_total`, la última columna (Total) de las filas de datos
+    se sombrea en #D6E4F0 (igual que el PDF); el resto, en blanco.
     """
     from docx.shared import Pt
 
@@ -463,13 +615,99 @@ def _tabla_docx(doc, encabezados, filas, fuente_pt=8, grupos=None):
     for celda in tabla.rows[0].cells:
         _sombrear_celda(celda, "#e8eef7")
 
-    # Banding por grupos (columnas 1..n; la 0 es el índice)
-    if grupos:
-        for k, (j0, j1) in enumerate(_rangos_grupos(grupos)):
-            if k % 2 == 1:
-                for fila in tabla.rows[1:]:
-                    for j in range(j0, min(j1 + 1, len(fila.cells))):
-                        _sombrear_celda(fila.cells[j], "#eef3fa")
+    # Última columna (Total) sombreada; el resto de los datos, en blanco
+    if resaltar_total and len(encabezados) > 1:
+        j = len(encabezados) - 1
+        for fila in tabla.rows[1:]:
+            _sombrear_celda(fila.cells[j], "#d6e4f0")
+    return tabla
+
+
+def _tabla_docx_multinivel(doc, columnas, filas, enc_nivel2, fuente_pt=7):
+    """
+    Tabla con encabezado de 2 filas fusionadas (igual que el PDF):
+
+    - Fila 1: 'Tipo' (fusión vertical) + una celda por grupo fusionada.
+    - Fila 2: cada movimiento; fila vacía bajo 'Tipo' y bajo la Total
+      general.
+    - Datos en blanco; 'Total' de cada grupo en #E8EEF7 y Total general
+      en #D6E4F0.
+    """
+    from docx.shared import Pt
+
+    ncols = len(enc_nivel2)
+    tabla = doc.add_table(rows=2, cols=ncols)
+    tabla.style = "Table Grid"
+
+    # Fila 2: movimientos (la columna 0 queda bajo la fusión de "Tipo")
+    for j in range(1, ncols):
+        tabla.rows[1].cells[j].text = str(enc_nivel2[j])
+
+    # Fila 1: grupos fusionados
+    i = 0
+    while i < len(columnas):
+        col = columnas[i]
+        grupo = (str(col[0]).strip() if isinstance(col, tuple)
+                 else str(col).strip())
+        j = i
+        while j + 1 < len(columnas):
+            c2 = columnas[j + 1]
+            g2 = (str(c2[0]).strip() if isinstance(c2, tuple)
+                  else str(c2).strip())
+            if g2 != grupo:
+                break
+            j += 1
+        celda = tabla.rows[0].cells[1 + i]
+        if j > i:
+            celda = celda.merge(tabla.rows[0].cells[1 + j])
+        celda.text = grupo
+        i = j + 1
+
+    # Fusión vertical de "Tipo"
+    celda_tipo = tabla.rows[0].cells[0].merge(tabla.rows[1].cells[0])
+    celda_tipo.text = "Tipo"
+
+    # Filas de datos
+    for fila in filas:
+        celdas = tabla.add_row().cells
+        for j, txt in enumerate(fila):
+            celdas[j].text = str(txt)
+
+    # Fuentes: Arial; encabezados en negrita
+    for i_fila, fila in enumerate(tabla.rows):
+        for celda in fila.cells:
+            for parrafo in celda.paragraphs:
+                parrafo.paragraph_format.space_before = Pt(0)
+                parrafo.paragraph_format.space_after = Pt(0)
+                for run in parrafo.runs:
+                    run.font.size = Pt(fuente_pt)
+                    run.font.name = "Arial"
+                    if i_fila < 2:
+                        run.bold = True
+
+    # Encabezados con fondo (dedupe de celdas fusionadas)
+    vistos = set()
+    for fila in tabla.rows[:2]:
+        for celda in fila.cells:
+            if id(celda._tc) in vistos:
+                continue
+            vistos.add(id(celda._tc))
+            _sombrear_celda(celda, "#e8eef7")
+
+    # Banding: sólo columnas Total (índice de tabla = 1 + posición)
+    for k, col in enumerate(columnas):
+        if not isinstance(col, tuple):
+            continue
+        n0 = str(col[0]).strip().lower()
+        n1 = str(col[1]).strip().lower() if len(col) > 1 else ""
+        if n0 == "total":
+            color = "#d6e4f0"
+        elif n1 == "total":
+            color = "#e8eef7"
+        else:
+            continue
+        for fila in tabla.rows[2:]:
+            _sombrear_celda(fila.cells[1 + k], color)
     return tabla
 
 
@@ -516,27 +754,32 @@ def generar_docx(ctx):
     doc.add_heading("Factor de hora pico (FHP)", level=1)
     _pares_docx(doc, _metricas_fhp(ctx["fhp_data"]))
 
-    # ── Resumen agrupado ──
+    # ── Resumen agrupado (encabezado de 2 filas) ──
     resumen_agr = ctx.get("resumen_agr")
     if resumen_agr is not None:
         doc.add_heading("Resumen hora pico (agrupado)", level=1)
-        enc_planos, grupos = _columnas_con_grupos(resumen_agr)
-        enc, filas = _df_a_tabla(resumen_agr, encabezados=enc_planos)
-        _tabla_docx(doc, enc, filas, fuente_pt=7, grupos=grupos)
+        columnas = list(resumen_agr.columns)
+        filas = [[str(idx)] + [_fmt(v) for v in fila]
+                 for idx, fila in resumen_agr.iterrows()]
+        enc_nivel2 = ["Tipo"] + [
+            (str(c[1]).strip() if isinstance(c, tuple) and len(c) > 1 else "")
+            for c in columnas
+        ]
+        _tabla_docx_multinivel(doc, columnas, filas, enc_nivel2)
 
     # ── % pesados ──
     pesados_hp = ctx.get("pesados_hp")
     if pesados_hp is not None:
         doc.add_heading("% de vehículos pesados — hora pico", level=1)
         enc, filas = _df_a_tabla(pesados_hp, index_nombre="tipo_vehiculo")
-        _tabla_docx(doc, enc, filas, fuente_pt=7)
+        _tabla_docx(doc, enc, filas, fuente_pt=7, resaltar_total=True)
 
     # ── Totales 15 min ──
     totales = ctx.get("totales")
     if totales is not None:
         doc.add_heading("Totales por bloque de 15 min", level=1)
         enc, filas = _df_a_tabla(totales, index_nombre="#")
-        _tabla_docx(doc, enc, filas, fuente_pt=7)
+        _tabla_docx(doc, enc, filas, fuente_pt=7, resaltar_total=True)
 
     # ── Gráficos ──
     con_imagenes = [(t, png) for t, png in ctx.get("imagenes", []) if png]
