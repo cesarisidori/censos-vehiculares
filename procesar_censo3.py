@@ -36,6 +36,7 @@ Uso:
 """
 
 import argparse
+import io
 import re
 from pathlib import Path
 
@@ -55,8 +56,13 @@ PATRON_TOTAL_FILA = re.compile(r"^\s*total(es)?\b", re.IGNORECASE)
 # ─────────────────────────────────────────────────────────────
 # Lectura
 # ─────────────────────────────────────────────────────────────
-def leer_config(ruta: str) -> dict:
-    """Lee hoja CONFIG si existe. Devuelve dict clave->valor (str)."""
+def leer_config(ruta) -> dict:
+    """
+    Lee hoja CONFIG si existe. Devuelve dict clave->valor (str).
+    `ruta` puede ser una ruta (str/Path) o un buffer (BytesIO).
+    """
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
     try:
         df = pd.read_excel(ruta, sheet_name="CONFIG", dtype=str)
     except Exception:
@@ -79,8 +85,10 @@ def parse_lista(cfg: dict, clave: str) -> list:
     return [t.strip() for t in cfg[clave].split(",") if t.strip()]
 
 
-def leer_mapa(ruta: str):
-    """Lee hoja MAPA si existe."""
+def leer_mapa(ruta):
+    """Lee hoja MAPA si existe. `ruta` puede ser ruta o buffer (BytesIO)."""
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
     try:
         df = pd.read_excel(ruta, sheet_name="MAPA", dtype=str)
     except Exception:
@@ -96,8 +104,10 @@ def leer_mapa(ruta: str):
     return df.reset_index(drop=True)
 
 
-def leer_datos(ruta: str):
-    """Lee hoja DATOS y valida."""
+def leer_datos(ruta):
+    """Lee hoja DATOS y valida. `ruta` puede ser ruta o buffer (BytesIO)."""
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
     df = pd.read_excel(ruta, sheet_name="DATOS", dtype=str)
     df.columns = [str(c).strip() for c in df.columns]
 
@@ -330,6 +340,80 @@ def tabla_pesados(df_origen, movs, tipos_pesados, tipos_excluidos,
 
 
 # ─────────────────────────────────────────────────────────────
+# Pipeline
+# ─────────────────────────────────────────────────────────────
+def procesar(ruta, excluidos=None, nombre_fila_total=None,
+             calcular_pesados=None, tipos_pesados=None):
+    """
+    Pipeline completo de cálculo. Acepta ruta o buffer (BytesIO).
+
+    Los parámetros en None se toman de la hoja CONFIG (con sus defaults).
+    Es la misma función que usa la app Streamlit y la CLI (`main`).
+
+    Devuelve un dict con: cfg, mapa, df, movs, excluidos,
+    nombre_fila_total, totales, pico, fhp_data, resumen_plano,
+    resumen_agr, pesados_hp, pesados_total.
+    """
+    cfg = leer_config(ruta)
+
+    if excluidos is None:
+        if "tipos_excluidos" in cfg:
+            excluidos = parse_lista(cfg, "tipos_excluidos")
+        else:
+            excluidos = TIPOS_EXCLUIDOS_DEFAULT
+    if nombre_fila_total is None:
+        nombre_fila_total = cfg.get("nombre_fila_total",
+                                    NOMBRE_FILA_TOTAL_DEFAULT)
+    if calcular_pesados is None:
+        calcular_pesados = (cfg.get("calcular_pct_pesados", "NO")
+                            .strip().upper() == "SI")
+    if tipos_pesados is None:
+        tipos_pesados = parse_lista(cfg, "tipos_pesados")
+
+    mapa = leer_mapa(ruta)
+    df, movs = leer_datos(ruta)
+
+    totales = totales_15min(df, movs, excluidos)
+    pico = detectar_hora_pico(totales, VENTANA_PICO)
+    fhp_data = calcular_fhp(totales, pico[0], pico[1], VENTANA_PICO)
+    resumen_plano = resumen_plano_hora_pico(df, movs, excluidos,
+                                            pico[0], pico[1])
+
+    resumen_agr = None
+    if mapa is not None and len(mapa) > 0:
+        resumen_agr = resumen_agrupado(df, movs, excluidos, mapa,
+                                       pico[0], pico[1], nombre_fila_total)
+
+    pesados_hp = None
+    pesados_total = None
+    if calcular_pesados and tipos_pesados:
+        df_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
+        pesados_hp = tabla_pesados(df_hp, movs, tipos_pesados, excluidos,
+                                   nombre_fila_total)
+        pesados_total = tabla_pesados(df, movs, tipos_pesados, excluidos,
+                                      nombre_fila_total)
+    elif calcular_pesados and not tipos_pesados:
+        print("⚠️  calcular_pct_pesados = SI pero 'tipos_pesados' "
+              "está vacío. Se omite.")
+
+    return {
+        "cfg": cfg,
+        "mapa": mapa,
+        "df": df,
+        "movs": movs,
+        "excluidos": excluidos,
+        "nombre_fila_total": nombre_fila_total,
+        "totales": totales,
+        "pico": pico,
+        "fhp_data": fhp_data,
+        "resumen_plano": resumen_plano,
+        "resumen_agr": resumen_agr,
+        "pesados_hp": pesados_hp,
+        "pesados_total": pesados_total,
+    }
+
+
+# ─────────────────────────────────────────────────────────────
 # Impresión terminal (aplanada)
 # ─────────────────────────────────────────────────────────────
 def imprimir(df, movs, totales, pico, resumen_plano_df, resumen_agr_df,
@@ -378,43 +462,68 @@ def imprimir(df, movs, totales, pico, resumen_plano_df, resumen_agr_df,
 # ─────────────────────────────────────────────────────────────
 # Exportación
 # ─────────────────────────────────────────────────────────────
+def _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
+                    pesados_hp, pesados_total, totales, df,
+                    hojas_extra=None):
+    """Escribe todas las hojas del resultado en un ExcelWriter abierto."""
+    # 1) FHP
+    fhp_df = pd.DataFrame([
+        ("Hora pico inicio",   fhp_data["hora_pico_inicio"]),
+        ("Hora pico fin",      fhp_data["hora_pico_fin"]),
+        ("Volumen HP",         fhp_data["volumen_hp"]),
+        ("Bloque máx inicio",  fhp_data["bloque_max_inicio"]),
+        ("Bloque máx fin",     fhp_data["bloque_max_fin"]),
+        ("Volumen máx 15 min", fhp_data["volumen_max_15min"]),
+        ("FHP",                fhp_data["fhp"]),
+    ], columns=["concepto", "valor"])
+    fhp_df.to_excel(w, sheet_name="FHP", index=False)
+
+    # 2) Resumen agrupado
+    if resumen_agr_df is not None:
+        resumen_agr_df.to_excel(w, sheet_name="Resumen_Hora_Pico")
+
+    # 3) Resumen plano
+    resumen_plano_df.to_excel(w, sheet_name="Resumen_Hora_Pico_Plano")
+
+    # 4) Pesados hora pico
+    if pesados_hp is not None:
+        pesados_hp.to_excel(w, sheet_name="Pesados_Hora_Pico")
+
+    # 5) Pesados total
+    if pesados_total is not None:
+        pesados_total.to_excel(w, sheet_name="Pesados_Total")
+
+    # 6) Totales 15 min
+    totales.to_excel(w, sheet_name="Totales_15min", index=False)
+
+    # 7) Datos originales
+    df.to_excel(w, sheet_name="Datos_Originales", index=False)
+
+    # 8) Hojas extra (opcionales)
+    if hojas_extra:
+        for nombre, hoja in hojas_extra.items():
+            hoja.to_excel(w, sheet_name=nombre, index=False)
+
+
 def exportar(salida, fhp_data, resumen_agr_df, resumen_plano_df,
-             pesados_hp, pesados_total, totales, df):
+             pesados_hp, pesados_total, totales, df, hojas_extra=None):
+    """Exporta el resultado a un archivo (ruta o buffer)."""
     with pd.ExcelWriter(salida, engine="openpyxl") as w:
-        # 1) FHP
-        fhp_df = pd.DataFrame([
-            ("Hora pico inicio",   fhp_data["hora_pico_inicio"]),
-            ("Hora pico fin",      fhp_data["hora_pico_fin"]),
-            ("Volumen HP",         fhp_data["volumen_hp"]),
-            ("Bloque máx inicio",  fhp_data["bloque_max_inicio"]),
-            ("Bloque máx fin",     fhp_data["bloque_max_fin"]),
-            ("Volumen máx 15 min", fhp_data["volumen_max_15min"]),
-            ("FHP",                fhp_data["fhp"]),
-        ], columns=["concepto", "valor"])
-        fhp_df.to_excel(w, sheet_name="FHP", index=False)
-
-        # 2) Resumen agrupado
-        if resumen_agr_df is not None:
-            resumen_agr_df.to_excel(w, sheet_name="Resumen_Hora_Pico")
-
-        # 3) Resumen plano
-        resumen_plano_df.to_excel(w, sheet_name="Resumen_Hora_Pico_Plano")
-
-        # 4) Pesados hora pico
-        if pesados_hp is not None:
-            pesados_hp.to_excel(w, sheet_name="Pesados_Hora_Pico")
-
-        # 5) Pesados total
-        if pesados_total is not None:
-            pesados_total.to_excel(w, sheet_name="Pesados_Total")
-
-        # 6) Totales 15 min
-        totales.to_excel(w, sheet_name="Totales_15min", index=False)
-
-        # 7) Datos originales
-        df.to_excel(w, sheet_name="Datos_Originales", index=False)
-
+        _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
+                        pesados_hp, pesados_total, totales, df, hojas_extra)
     print(f"\n✅ Exportado: {salida}")
+
+
+def exportar_buffer(fhp_data, resumen_agr_df, resumen_plano_df,
+                    pesados_hp, pesados_total, totales, df,
+                    hojas_extra=None):
+    """Exporta el resultado a un buffer en memoria (descarga desde la app)."""
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
+                        pesados_hp, pesados_total, totales, df, hojas_extra)
+    buf.seek(0)
+    return buf
 
 
 # ─────────────────────────────────────────────────────────────
@@ -429,68 +538,18 @@ def main():
                         help="Imprime el resumen por terminal (default: silencioso)")
     args = parser.parse_args()
 
-    # 1) Config
-    cfg = leer_config(args.ruta)
+    # Pipeline completo (misma función que usa la app Streamlit)
+    res = procesar(args.ruta, excluidos=args.excluir)
 
-    # 2) Excluidos
-    if args.excluir is not None:
-        excluidos = args.excluir
-    elif "tipos_excluidos" in cfg:
-        excluidos = parse_lista(cfg, "tipos_excluidos")
-    else:
-        excluidos = TIPOS_EXCLUIDOS_DEFAULT
-
-    nombre_fila_total = cfg.get("nombre_fila_total", NOMBRE_FILA_TOTAL_DEFAULT)
-
-    # 3) Pesados
-    calcular_pesados = cfg.get("calcular_pct_pesados", "NO").strip().upper() == "SI"
-    tipos_pesados = parse_lista(cfg, "tipos_pesados")
-
-    # 4) MAPA y DATOS
-    mapa = leer_mapa(args.ruta)
-    df, movs = leer_datos(args.ruta)
-
-    # 5) Cálculos principales
-    totales = totales_15min(df, movs, excluidos)
-    pico = detectar_hora_pico(totales, VENTANA_PICO)
-    fhp_data = calcular_fhp(totales, pico[0], pico[1], VENTANA_PICO)
-
-    resumen_plano_df = resumen_plano_hora_pico(
-        df, movs, excluidos, pico[0], pico[1]
-    )
-
-    resumen_agr_df = None
-    if mapa is not None and len(mapa) > 0:
-        resumen_agr_df = resumen_agrupado(
-            df, movs, excluidos, mapa, pico[0], pico[1], nombre_fila_total
-        )
-    else:
-        print("ℹ️  Sin hoja MAPA: se omite resumen agrupado.")
-
-    # 6) Pesados
-    pesados_hp = None
-    pesados_total = None
-    if calcular_pesados and tipos_pesados:
-        # Hora pico
-        df_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
-        pesados_hp = tabla_pesados(df_hp, movs, tipos_pesados, excluidos,
-                                   nombre_fila_total)
-        # Censo completo
-        pesados_total = tabla_pesados(df, movs, tipos_pesados, excluidos,
-                                      nombre_fila_total)
-    elif calcular_pesados and not tipos_pesados:
-        print("⚠️  calcular_pct_pesados = SI pero 'tipos_pesados' está vacío. Se omite.")
-
-    # 7) Imprimir
     if args.verbose:
-        imprimir(df, movs, totales, pico, resumen_plano_df, resumen_agr_df,
-                 excluidos, {"nombre_fila_total": nombre_fila_total},
-                 fhp_data, pesados_hp, pesados_total)
+        imprimir(res["df"], res["movs"], res["totales"], res["pico"],
+                 res["resumen_plano"], res["resumen_agr"], res["excluidos"],
+                 {"nombre_fila_total": res["nombre_fila_total"]},
+                 res["fhp_data"], res["pesados_hp"], res["pesados_total"])
 
-    # 8) Exportar
     salida = Path(args.ruta).with_name(f"resultado_{Path(args.ruta).stem}.xlsx")
-    exportar(salida, fhp_data, resumen_agr_df, resumen_plano_df,
-             pesados_hp, pesados_total, totales, df)
+    exportar(salida, res["fhp_data"], res["resumen_agr"], res["resumen_plano"],
+             res["pesados_hp"], res["pesados_total"], res["totales"], res["df"])
 
 
 if __name__ == "__main__":

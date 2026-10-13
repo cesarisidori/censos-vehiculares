@@ -1,4 +1,9 @@
 streamlit
 pandas
 openpyxl
-plotly
+# El resto va con versión fija: son los que determinan que la exportación
+# de imágenes (kaleido) y los reportes funcionen igual en cualquier máquina.
+plotly==5.15.0      # kaleido 0.2.1 NO es compatible con plotly>=6
+kaleido==0.2.1      # trae Chromium embebido (Windows/Linux, sin Chrome)
+reportlab==5.0.1    # PDF
+python-docx==1.2.0  # DOCX

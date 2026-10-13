@@ -6,18 +6,16 @@ Ejecutar:
 """
 
 import io
-import re
+from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-# Importar el motor existente
-import procesar_censo3 as motor
-
-#importar generador de croquis
 import croquis as crq
-
+import graficos as grf
+import procesar_censo3 as motor
+import reportes as rep
 
 # ─────────────────────────────────────────────────────────────
 # Configuración de página
@@ -33,269 +31,84 @@ st.caption("Subí el Excel del censo. Los cálculos se hacen automáticamente.")
 
 
 # ─────────────────────────────────────────────────────────────
-# 1) Carga del archivo
+# Helpers
 # ─────────────────────────────────────────────────────────────
-archivo = st.file_uploader(
-    "Seleccioná el archivo Excel del censo",
-    type=["xlsx", "xls"],
-    help="Debe tener una hoja DATOS (obligatoria), y opcionalmente MAPA y CONFIG.",
-)
-
-if archivo is None:
-    st.info("⬆️ Subí un archivo para comenzar.")
-    st.stop()
+DIAS = ["LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES",
+        "SÁBADO", "DOMINGO"]
+MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+         "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE",
+         "DICIEMBRE"]
 
 
-# ─────────────────────────────────────────────────────────────
-# 2) Lectura inicial (para poblar checkboxes)
-# ─────────────────────────────────────────────────────────────
-# Streamlit necesita un path o buffer. Pasamos un buffer de bytes al motor.
+def _fecha_legible(dt) -> str:
+    """date → '22 DE SEPTIEMBRE DE 2026' (sin día de la semana)."""
+    if dt is None:
+        return ""
+    return f"{dt.day} DE {MESES[dt.month - 1]} DE {dt.year}"
+
+
+def _dia_semana(dt) -> str:
+    """date → 'MARTES'."""
+    return DIAS[dt.weekday()] if dt else ""
+
+
+def _parse_fecha_cfg(texto):
+    """'2026-09-22' | '22/09/2026' → date, o None si no se puede."""
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(str(texto).strip(), fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 @st.cache_data(show_spinner=False)
-def cargar_estructura(contenido: bytes):
-    """Lee el Excel y devuelve metadata para poblar la UI."""
-    buffer = io.BytesIO(contenido)
-
-    # Leer hojas directamente
-    xls = pd.ExcelFile(buffer)
-
+def _leer_estructura(contenido: bytes):
+    """Lee CONFIG (vía motor) y los tipos de DATOS, para poblar la UI."""
+    xls = pd.ExcelFile(io.BytesIO(contenido))
     if "DATOS" not in xls.sheet_names:
         raise ValueError("El archivo no tiene una hoja 'DATOS'.")
 
-    # Leer CONFIG si existe
-    buffer.seek(0)
-    try:
-        df_cfg = pd.read_excel(buffer, sheet_name="CONFIG", dtype=str)
-        df_cfg.columns = [str(c).strip().lower() for c in df_cfg.columns]
-        cfg = {}
-        for _, row in df_cfg.iterrows():
-            cfg[str(row["clave"]).strip().lower()] = (
-                str(row["valor"]).strip() if pd.notna(row["valor"]) else ""
-            )
-    except Exception:
-        cfg = {}
+    cfg = motor.leer_config(io.BytesIO(contenido))
 
-    # Leer DATOS para sacar tipos
-    buffer.seek(0)
-    df_datos = pd.read_excel(buffer, sheet_name="DATOS", dtype=str)
-    df_datos.columns = [str(c).strip() for c in df_datos.columns]
-
-    tipos = sorted(
-        df_datos["tipo_vehiculo"].dropna().astype(str).str.strip().unique().tolist()
-    ) if "tipo_vehiculo" in df_datos.columns else []
-
+    df_datos = pd.read_excel(io.BytesIO(contenido), sheet_name="DATOS",
+                             dtype=str)
+    tipos = []
+    if "tipo_vehiculo" in df_datos.columns:
+        tipos = sorted(df_datos["tipo_vehiculo"].dropna().astype(str)
+                       .str.strip().unique().tolist())
     return cfg, tipos
 
 
-try:
-    cfg_inicial, tipos_detectados = cargar_estructura(archivo.getvalue())
-except Exception as e:
-    st.error(f"❌ Error al leer el archivo: {e}")
-    st.stop()
+@st.cache_data(show_spinner="🖼️ Preparando gráficos del reporte…")
+def _imagenes_reporte(figuras):
+    """PNG de cada figura con kaleido. Los croquis conservan su proporción."""
+    return [
+        (titulo, rep.fig_a_png(fig, ancho=None if "Croquis" in titulo else 1100))
+        for titulo, fig in figuras
+    ]
 
 
-# ─────────────────────────────────────────────────────────────
-# 3) Controles de configuración
-# ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("⚙️ Configuración")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.markdown("**Tipos a excluir** (no suman en hora pico ni totales)")
-    excluidos_default = [t.strip() for t in cfg_inicial.get("tipos_excluidos", "").split(",") if t.strip()]
-    excluidos = st.multiselect(
-        "Elegí los tipos a excluir",
-        options=tipos_detectados,
-        default=[t for t in excluidos_default if t in tipos_detectados],
-        label_visibility="collapsed",
-    )
-
-with col2:
-    st.markdown("**Nombre de la fila total**")
-    nombre_fila_total = st.text_input(
-        "Nombre de la fila total",
-        value=cfg_inicial.get("nombre_fila_total", motor.NOMBRE_FILA_TOTAL_DEFAULT),
-        label_visibility="collapsed",
-    )
-
-st.markdown("**Tipos pesados** (para el cálculo del % de pesados)")
-calcular_pesados = st.checkbox(
-    "Calcular % de vehículos pesados",
-    value=cfg_inicial.get("calcular_pct_pesados", "NO").strip().upper() == "SI",
-)
-
-tipos_pesados_default = [t.strip() for t in cfg_inicial.get("tipos_pesados", "").split(",") if t.strip()]
-tipos_pesados = st.multiselect(
-    "Tipos que cuentan como pesados",
-    options=[t for t in tipos_detectados if t not in excluidos],
-    default=[t for t in tipos_pesados_default if t in tipos_detectados and t not in excluidos],
-    disabled=not calcular_pesados,
-)
-
-st.markdown("**Personalización de gráficos** (opcional, se puede dejar vacío)")
-col_t1, col_t2 = st.columns(2)
-
-with col_t1:
-    titulo_personalizado = st.text_input(
-        "Título de los gráficos",
-        value="",
-        placeholder="Ej: VOLUMEN TRÁNSITO",
-        help="Si lo dejás vacío, se usa 'VOLUMEN TRÁNSITO <calle>'",
-    )
-
-with col_t2:
-    subtitulo_personalizado = st.text_input(
-        "Subtítulo de los gráficos",
-        value="",
-        placeholder="Ej: DOMINGO 26 DE JULIO DE 2026",
-        help="Si lo dejás vacío, se usa la fecha del CONFIG",
-    )
+@st.cache_data(show_spinner="📄 Generando PDF…")
+def _generar_pdf(ctx):
+    return rep.generar_pdf(ctx)
 
 
-# ─────────────────────────────────────────────────────────────
-# 4) Procesamiento
-# ─────────────────────────────────────────────────────────────
-if not st.button("▶️ Procesar censo", type="primary"):
-    st.stop()
-
-with st.spinner("Procesando..."):
-
-    # Reconstruimos el Excel con la config actualizada del usuario
-    # (para que el motor lo lea como si fuera un archivo normal)
-    buffer = io.BytesIO(archivo.getvalue())
-
-    # Reescribimos CONFIG con los valores de la UI
-    xls = pd.ExcelFile(buffer)
-    hojas = {nombre: pd.read_excel(buffer, sheet_name=nombre, dtype=str)
-             for nombre in xls.sheet_names}
-    hojas["CONFIG"] = pd.DataFrame({
-        "clave": [
-            "tipos_excluidos",
-            "nombre_fila_total",
-            "calcular_pct_pesados",
-            "tipos_pesados",
-        ],
-        "valor": [
-            ", ".join(excluidos),
-            nombre_fila_total,
-            "SI" if calcular_pesados else "NO",
-            ", ".join(tipos_pesados),
-        ],
-    })
-
-    # Guardamos en un archivo temporal en memoria
-    excel_buffer = io.BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as w:
-        for nombre, df in hojas.items():
-            df.to_excel(w, sheet_name=nombre, index=False)
-    excel_buffer.seek(0)
-
-    # Guardamos a un archivo temporal en disco (el motor lee por path)
-    import tempfile
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
-        tmp.write(excel_buffer.getvalue())
-        ruta_tmp = Path(tmp.name)
-
-    # ── Ejecutamos el motor paso a paso (sin CLI) ──
-    try:
-        cfg = motor.leer_config(str(ruta_tmp))
-        mapa = motor.leer_mapa(str(ruta_tmp))
-        df, movs = motor.leer_datos(str(ruta_tmp))
-
-#para comprobacion luego comentar
-        st.write("**DEBUG — tipos en df:**", sorted(df["tipo_vehiculo"].unique()))
-        st.write("**DEBUG — shape df:**", df.shape)
-        st.write("**DEBUG — suma por tipo:**",
-                df.groupby("tipo_vehiculo")[movs].sum().sum(axis=1).to_dict())
-
-        excluidos_final = excluidos if excluidos else motor.TIPOS_EXCLUIDOS_DEFAULT
-
-        totales = motor.totales_15min(df, movs, excluidos_final)
-        pico = motor.detectar_hora_pico(totales, motor.VENTANA_PICO)
-        fhp_data = motor.calcular_fhp(totales, pico[0], pico[1], motor.VENTANA_PICO)
-
-        resumen_plano = motor.resumen_plano_hora_pico(
-            df, movs, excluidos_final, pico[0], pico[1]
-        )
-
-        resumen_agr = None
-        if mapa is not None and len(mapa) > 0:
-            resumen_agr = motor.resumen_agrupado(
-                df, movs, excluidos_final, mapa, pico[0], pico[1],
-                nombre_fila_total,
-            )
-
-        pesados_hp = None
-        pesados_total = None
-        if calcular_pesados and tipos_pesados:
-            df_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
-            pesados_hp = motor.tabla_pesados(
-                df_hp, movs, tipos_pesados, excluidos_final, nombre_fila_total
-            )
-            pesados_total = motor.tabla_pesados(
-                df, movs, tipos_pesados, excluidos_final, nombre_fila_total
-            )
-
-    finally:
-        ruta_tmp.unlink(missing_ok=True)
-
-    # Guardamos también el Excel de salida en memoria para descarga
-    salida_buffer = io.BytesIO()
-    with pd.ExcelWriter(salida_buffer, engine="openpyxl") as w:
-        pd.DataFrame([
-            ("Hora pico inicio",   fhp_data["hora_pico_inicio"]),
-            ("Hora pico fin",      fhp_data["hora_pico_fin"]),
-            ("Volumen HP",         fhp_data["volumen_hp"]),
-            ("Bloque máx inicio",  fhp_data["bloque_max_inicio"]),
-            ("Bloque máx fin",     fhp_data["bloque_max_fin"]),
-            ("Volumen máx 15 min", fhp_data["volumen_max_15min"]),
-            ("FHP",                fhp_data["fhp"]),
-        ], columns=["concepto", "valor"]).to_excel(w, sheet_name="FHP", index=False)
-
-        if resumen_agr is not None:
-            resumen_agr.to_excel(w, sheet_name="Resumen_Hora_Pico")
-        resumen_plano.to_excel(w, sheet_name="Resumen_Hora_Pico_Plano")
-        if pesados_hp is not None:
-            pesados_hp.to_excel(w, sheet_name="Pesados_Hora_Pico")
-        if pesados_total is not None:
-            pesados_total.to_excel(w, sheet_name="Pesados_Total")
-        totales.to_excel(w, sheet_name="Totales_15min", index=False)
-        df.to_excel(w, sheet_name="Datos_Originales", index=False)
-
-    salida_buffer.seek(0)
+@st.cache_data(show_spinner="📄 Generando DOCX…")
+def _generar_docx(ctx):
+    return rep.generar_docx(ctx)
 
 
-# ─────────────────────────────────────────────────────────────
-# 5) Mostrar resultados
-# ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("📊 Resultados")
-
-# Métricas destacadas
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Hora pico", f"{fhp_data['hora_pico_inicio']} – {fhp_data['hora_pico_fin']}")
-c2.metric("Volumen HP", f"{fhp_data['volumen_hp']:,}")
-c3.metric("Volumen máx 15 min", f"{fhp_data['volumen_max_15min']:,}",
-          help=f"Bloque {fhp_data['bloque_max_inicio']} – {fhp_data['bloque_max_fin']}")
-c4.metric("FHP", f"{fhp_data['fhp']:.3f}")
-
-# Tabla agrupada (render HTML con 3 niveles de encabezado)
-if resumen_agr is not None:
-    st.markdown("### 📋 Resumen hora pico (agrupado)")
-
-    # ── Preparar estructura: separar calle y sentido ──
-    columnas = list(resumen_agr.columns)
-
-    # Agrupar columnas por calle (nivel 0 del índice de columnas)
-    # Cada columna es (calle_sentido, mov). Lo partimos en (calle, sentido, mov)
+def _tabla_agrupada_html(resumen_agr) -> str:
+    """Tabla HTML con encabezado de 3 niveles (calle / sentido / movimiento)."""
+    # ── Separar calle y sentido de cada columna ──
     columnas_split = []
-    for grupo, mov in columnas:
+    for grupo, mov in resumen_agr.columns:
         if grupo == "Total":
             columnas_split.append(("Total", "", ""))
         else:
             partes = [p.strip() for p in grupo.split("|")]
-            calle = partes[0] if len(partes) > 0 else ""
+            calle = partes[0] if partes else ""
             sentido = partes[1] if len(partes) > 1 else ""
             columnas_split.append((calle, sentido, mov))
 
@@ -305,7 +118,8 @@ if resumen_agr is not None:
     while i < len(columnas_split):
         calle = columnas_split[i][0]
         span = 1
-        while i + span < len(columnas_split) and columnas_split[i + span][0] == calle:
+        while (i + span < len(columnas_split)
+               and columnas_split[i + span][0] == calle):
             span += 1
         fila1.append((calle, span))
         i += span
@@ -315,7 +129,6 @@ if resumen_agr is not None:
     i = 0
     while i < len(columnas_split):
         calle, sentido, _ = columnas_split[i]
-        # Agrupar por (calle, sentido) consecutivos
         span = 1
         while (i + span < len(columnas_split)
                and columnas_split[i + span][0] == calle
@@ -348,35 +161,293 @@ if resumen_agr is not None:
     </style>
     <table class="tabla-censo"><thead>
     """
-
-    # Fila 1
     html += "<tr><th rowspan='3' style='vertical-align:middle;'>Tipo</th>"
     for calle, span in fila1:
         html += f"<th colspan='{span}'>{calle}</th>"
-    html += "</tr>"
-
-    # Fila 2
-    html += "<tr>"
+    html += "</tr><tr>"
     for sentido, span in fila2:
         html += f"<th colspan='{span}'>{sentido}</th>"
-    html += "</tr>"
-
-    # Fila 3
-    html += "<tr>"
+    html += "</tr><tr>"
     for mov in fila3:
         html += f"<th>{mov}</th>"
     html += "</tr></thead><tbody>"
 
-    # Filas de datos
     for idx, row in resumen_agr.iterrows():
         html += f"<tr><td>{idx}</td>"
         for val in row:
             html += f"<td>{val}</td>"
         html += "</tr>"
     html += "</tbody></table>"
+    return html
 
-    st.markdown(html, unsafe_allow_html=True)
 
+# ─────────────────────────────────────────────────────────────
+# Mapeo fijo de movimientos → posiciones del croquis
+# NORTE:  9, 8, 7  (izq a der) · SUR: 10, 11, 12 (izq a der)
+# ESTE:   4, 5, 6  (arriba a abajo) · OESTE: 1, 2, 3 (arriba a abajo)
+# ─────────────────────────────────────────────────────────────
+MAPEO_FIJO = {
+    "M9":  "N_IZQ",  "M8":  "N_FTE",  "M7":  "N_DER",
+    "M10": "S_IZQ",  "M11": "S_FTE",  "M12": "S_DER",
+    "M4":  "E_IZQ",  "M5":  "E_FTE",  "M6":  "E_DER",
+    "M1":  "O_IZQ",  "M2":  "O_FTE",  "M3":  "O_DER",
+}
+
+_SUFIJOS_RAMA = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
+
+
+def _inferir_nombres_ramas(mapa_df, movs_activos):
+    """
+    Devuelve {"N": "Fiambalá Norte", ...} inferido del MAPA,
+    mirando a qué rama del croquis va cada movimiento según MAPEO_FIJO.
+    """
+    nombres = {rama: "" for rama in _SUFIJOS_RAMA}
+
+    if mapa_df is not None:
+        for _, row in mapa_df.iterrows():
+            mov = str(row["movimiento"]).strip()
+            if mov not in movs_activos or mov not in MAPEO_FIJO:
+                continue
+            rama = MAPEO_FIJO[mov].split("_")[0]
+            if not nombres[rama]:
+                nombres[rama] = f"{str(row['calle']).strip()} {_SUFIJOS_RAMA[rama]}"
+
+    # Fallback: "Norte", "Sur", ...
+    for rama, sufijo in _SUFIJOS_RAMA.items():
+        if not nombres[rama]:
+            nombres[rama] = sufijo
+    return nombres
+
+
+def _inferir_mapeo_default(mapa_df, movs_activos):
+    """Devuelve el mapeo fijo para los movimientos que existan."""
+    return {m: p for m, p in MAPEO_FIJO.items() if m in movs_activos}
+
+
+# ─────────────────────────────────────────────────────────────
+# 1) Carga del archivo
+# ─────────────────────────────────────────────────────────────
+archivo = st.file_uploader(
+    "Seleccioná el archivo Excel del censo",
+    type=["xlsx", "xls"],
+    help="Debe tener una hoja DATOS (obligatoria), y opcionalmente MAPA y CONFIG.",
+)
+
+if archivo is None:
+    st.info("⬆️ Subí un archivo para comenzar.")
+    st.stop()
+
+contenido = archivo.getvalue()
+try:
+    cfg_inicial, tipos_detectados = _leer_estructura(contenido)
+except Exception as e:
+    st.error(f"❌ Error al leer el archivo: {e}")
+    st.stop()
+
+
+# ─────────────────────────────────────────────────────────────
+# 2) Controles de configuración
+# ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("⚙️ Configuración")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("**Tipos a excluir** (no suman en hora pico ni totales)")
+    excluidos_default = [t.strip() for t in
+                         cfg_inicial.get("tipos_excluidos", "").split(",")
+                         if t.strip()]
+    excluidos = st.multiselect(
+        "Elegí los tipos a excluir",
+        options=tipos_detectados,
+        default=[t for t in excluidos_default if t in tipos_detectados],
+        label_visibility="collapsed",
+    )
+
+with col2:
+    st.markdown("**Nombre de la fila total**")
+    nombre_fila_total = st.text_input(
+        "Nombre de la fila total",
+        value=cfg_inicial.get("nombre_fila_total",
+                              motor.NOMBRE_FILA_TOTAL_DEFAULT),
+        label_visibility="collapsed",
+    )
+
+st.markdown("**Tipos pesados** (para el cálculo del % de pesados)")
+calcular_pesados = st.checkbox(
+    "Calcular % de vehículos pesados",
+    value=cfg_inicial.get("calcular_pct_pesados", "NO").strip().upper() == "SI",
+)
+
+tipos_pesados_default = [t.strip() for t in
+                         cfg_inicial.get("tipos_pesados", "").split(",")
+                         if t.strip()]
+tipos_pesados = st.multiselect(
+    "Tipos que cuentan como pesados",
+    options=[t for t in tipos_detectados if t not in excluidos],
+    default=[t for t in tipos_pesados_default
+             if t in tipos_detectados and t not in excluidos],
+    disabled=not calcular_pesados,
+)
+
+
+# ─────────────────────────────────────────────────────────────
+# 3) Datos del reporte (carga manual)
+# ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("📋 Datos del reporte")
+st.caption("Se usan en el encabezado de los reportes PDF/DOCX y como "
+           "subtítulo por defecto de los gráficos.")
+
+fila_a = st.columns(3)
+fila_b = st.columns(2)
+
+with fila_a[0]:
+    fecha_sel = st.date_input(
+        "Fecha",
+        value=_parse_fecha_cfg(cfg_inicial.get("fecha_censo", ""))
+        or date.today(),
+        key="inp_fecha",
+    )
+
+# El Día se deriva de la Fecha; el usuario puede editarlo a mano.
+dia_auto = _dia_semana(fecha_sel)
+if st.session_state.get("_dia_auto_previo") != dia_auto:
+    st.session_state["_dia_auto_previo"] = dia_auto
+    st.session_state["inp_dia"] = dia_auto
+
+with fila_a[1]:
+    dia_txt = st.text_input(
+        "Día",
+        key="inp_dia",
+        help="Se completa automáticamente desde la Fecha. "
+             "Podés editarlo a mano (se vuelve a completar si cambiás la Fecha).",
+    ).strip()
+
+with fila_a[2]:
+    ubicacion_txt = st.text_input(
+        "Ubicación",
+        value=cfg_inicial.get("ubicacion", ""),
+        key="inp_ubicacion",
+        help="Precargable con la clave 'ubicacion' en la hoja CONFIG.",
+    )
+
+with fila_b[0]:
+    lugar_txt = st.text_input(
+        "Lugar",
+        value=cfg_inicial.get("lugar", ""),
+        key="inp_lugar",
+        help="Precargable con la clave 'lugar' en la hoja CONFIG.",
+    )
+
+with fila_b[1]:
+    analista_txt = st.text_input(
+        "Analista",
+        value=cfg_inicial.get("analista", ""),
+        key="inp_analista",
+        help="Precargable con la clave 'analista' en la hoja CONFIG.",
+    )
+
+
+# ─────────────────────────────────────────────────────────────
+# 4) Personalización de gráficos
+# ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("🎨 Personalización de gráficos")
+
+col_t1, col_t2 = st.columns(2)
+
+with col_t1:
+    titulo_personalizado = st.text_input(
+        "Título de los gráficos",
+        value="",
+        placeholder="Ej: VOLUMEN TRÁNSITO",
+        help="Si lo dejás vacío, se usa 'VOLUMEN TRÁNSITO <calle>'.",
+    )
+
+with col_t2:
+    subtitulo_personalizado = st.text_input(
+        "Subtítulo de los gráficos",
+        value="",
+        placeholder="Ej: DOMINGO 26 DE JULIO DE 2026",
+        help="Si lo dejás vacío, se usa el Día + la Fecha del reporte.",
+    )
+
+with st.expander("🖌️ Paleta de colores (8 series)"):
+    st.caption("Se aplica a líneas, barras, tortas y % de pesados. "
+               "Cambiá un color y volvé a clickear ▶️ Procesar censo.")
+    cols_color = st.columns(8)
+    paleta = []
+    for i, col_color in enumerate(cols_color):
+        with col_color:
+            paleta.append(st.color_picker(
+                f"Serie {i + 1}", grf.PALETA_DEFAULT[i],
+                key=f"color_serie_{i}",
+            ))
+
+
+# ─────────────────────────────────────────────────────────────
+# 5) Procesamiento
+# ─────────────────────────────────────────────────────────────
+st.divider()
+if not st.button("▶️ Procesar censo", type="primary"):
+    st.stop()
+
+with st.spinner("Procesando..."):
+    try:
+        # El motor recibe el buffer directamente (sin archivo temporal)
+        # y la configuración como parámetros (sin reescribir el Excel).
+        res = motor.procesar(
+            io.BytesIO(contenido),
+            excluidos=excluidos or motor.TIPOS_EXCLUIDOS_DEFAULT,
+            nombre_fila_total=nombre_fila_total,
+            calcular_pesados=calcular_pesados,
+            tipos_pesados=list(tipos_pesados),
+        )
+    except Exception as e:
+        st.error(f"❌ Error al procesar el censo: {e}")
+        st.stop()
+
+    # Excel de salida en memoria, para el botón de descarga
+    salida_buffer = motor.exportar_buffer(
+        res["fhp_data"], res["resumen_agr"], res["resumen_plano"],
+        res["pesados_hp"], res["pesados_total"], res["totales"], res["df"],
+    )
+
+df = res["df"]
+movs = res["movs"]
+mapa = res["mapa"]
+excluidos_final = res["excluidos"]
+totales = res["totales"]
+pico = res["pico"]
+fhp_data = res["fhp_data"]
+resumen_plano = res["resumen_plano"]
+resumen_agr = res["resumen_agr"]
+pesados_hp = res["pesados_hp"]
+pesados_total = res["pesados_total"]
+
+
+# ─────────────────────────────────────────────────────────────
+# 6) Mostrar resultados
+# ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("📊 Resultados")
+
+# Métricas destacadas
+c1, c2, c3, c4 = st.columns(4)
+c1.metric("Hora pico",
+          f"{fhp_data['hora_pico_inicio']} – {fhp_data['hora_pico_fin']}")
+c2.metric("Volumen HP", f"{fhp_data['volumen_hp']:,}")
+c3.metric("Volumen máx 15 min", f"{fhp_data['volumen_max_15min']:,}",
+          help=f"Bloque {fhp_data['bloque_max_inicio']} – "
+               f"{fhp_data['bloque_max_fin']}")
+c4.metric("FHP", f"{fhp_data['fhp']:.3f}")
+
+# Tabla agrupada (render HTML con 3 niveles de encabezado)
+if resumen_agr is not None:
+    st.markdown("### 📋 Resumen hora pico (agrupado)")
+    st.markdown(_tabla_agrupada_html(resumen_agr), unsafe_allow_html=True)
 else:
     st.warning("El archivo no tiene hoja MAPA: se omite el resumen agrupado.")
 
@@ -396,304 +467,61 @@ with st.expander("📄 Resumen hora pico (plano)"):
 with st.expander("📄 Totales por bloque de 15 min"):
     st.dataframe(totales, use_container_width=True)
 
-# ─────────────────────────────────────────────────────────────
-# 5b) Gráficos
-# ─────────────────────────────────────────────────────────────
-import plotly.express as px
-import plotly.graph_objects as go
-from datetime import datetime
 
+# ─────────────────────────────────────────────────────────────
+# 7) Gráficos
+# ─────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("📈 Gráficos")
 
+# Título / subtítulo base (editables en Personalización de gráficos)
+titulo_base = titulo_personalizado.strip() or "VOLUMEN TRÁNSITO"
+subtitulo_base = (subtitulo_personalizado.strip()
+                  or f"{dia_txt} {_fecha_legible(fecha_sel)}".strip())
 
-# ── Títulos editables ──
-def _fecha_legible(fecha_iso: str) -> str:
-    """'2026-09-22' o '22/09/2026' → 'MARTES 22 DE SEPTIEMBRE DE 2026'."""
-    if not fecha_iso:
-        return ""
-    dt = None
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-        try:
-            dt = datetime.strptime(fecha_iso.strip(), fmt)
-            break
-        except Exception:
-            continue
-    if dt is None:
-        return fecha_iso
-    dias = ["LUNES", "MARTES", "MIÉRCOLES", "JUEVES", "VIERNES",
-            "SÁBADO", "DOMINGO"]
-    meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
-             "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
-    return f"{dias[dt.weekday()]} {dt.day} DE {meses[dt.month - 1]} DE {dt.year}"
-
-
-fecha_censo = cfg.get("fecha_censo", "").strip()
-subtitulo_base = subtitulo_personalizado.strip() or _fecha_legible(fecha_censo)
-
-
-# ── Preparar datos de series por calle/sentido ──
-# Necesitamos: para cada bloque (hora o 15 min) × calle × sentido → volumen
-# Excluimos tipos excluidos.
-df_validos = df[~df["tipo_vehiculo"].isin(excluidos_final)]
-
-# Traer calle/sentido de cada movimiento
+# Volumen por calle/sentido (vectorizado, excluye tipos configurados)
 mapa_dict = {}
 if mapa is not None:
-    for _, row in mapa.iterrows():
-        mapa_dict[row["movimiento"]] = (row["calle"], row["sentido"])
+    mapa_dict = {row["movimiento"]: (row["calle"], row["sentido"])
+                 for _, row in mapa.iterrows()}
 
-# Enriquecer df con calle/sentido
-df_enriq = df_validos.copy()
-df_enriq["calle"] = df_enriq.apply(
-    lambda r: mapa_dict.get(r.name, (None, None))[0] if False else None, axis=1
-)
+df_validos = df[~df["tipo_vehiculo"].isin(excluidos_final)]
+df_cs = grf.volumen_por_calle_sentido(df_validos, movs, mapa_dict)
 
-# Mejor: armar tabla de agregación manualmente (más robusto)
-def _volumen_por_calle_sentido(df_validos, movs, mapa_dict):
-    """
-    Devuelve DataFrame con columnas:
-        hora_inicio, hora_fin, calle, sentido, volumen
-    Agrupa por bloque × calle × sentido.
-    """
-    registros = []
-    for _, fila in df_validos.iterrows():
-        for mov in movs:
-            if mov not in mapa_dict:
-                continue
-            calle, sentido = mapa_dict[mov]
-            vol = int(fila[mov])
-            if vol == 0:
-                continue
-            registros.append({
-                "hora_inicio": fila["hora_inicio"],
-                "hora_fin": fila["hora_fin"],
-                "calle": calle,
-                "sentido": sentido,
-                "volumen": vol,
-            })
-    if not registros:
-        return pd.DataFrame(columns=["hora_inicio", "hora_fin", "calle",
-                                     "sentido", "volumen"])
-    df_reg = pd.DataFrame(registros)
-    agg = df_reg.groupby(
-        ["hora_inicio", "hora_fin", "calle", "sentido"],
-        as_index=False
-    )["volumen"].sum()
-    return agg
+# (título de sección, figura) — se reutilizan para los reportes PDF/DOCX
+figuras = []
 
-
-df_cs = _volumen_por_calle_sentido(df_validos, movs, mapa_dict)
-
-
-# ── Función para dibujar un gráfico de barras agrupadas ──
-def _grafico_barras(df_cs, calle, bloques, titulo, subtitulo,
-                    etiquetas_x, eje_y_label):
-    """
-    df_cs      : DataFrame con columnas hora_inicio, calle, sentido, volumen
-    calle      : nombre de la calle a graficar
-    bloques    : lista de (hora_inicio, hora_fin, etiqueta_x)
-    """
-    sub = df_cs[df_cs["calle"] == calle]
-    if sub.empty:
-        st.info(f"Sin datos para la calle '{calle}'.")
-        return
-
-    sentidos = sorted(sub["sentido"].unique())
-    # Colores: azul, rojo, verde, violeta, naranja...
-    paleta = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-              "#ff7f0e", "#8c564b", "#e377c2"]
-
-    fig = go.Figure()
-    for i, sentido in enumerate(sentidos):
-        valores = []
-        for hi, hf, _ in bloques:
-            v = sub[
-                (sub["hora_inicio"] == hi) &
-                (sub["sentido"] == sentido)
-            ]["volumen"].sum()
-            valores.append(int(v))
-        fig.add_trace(go.Bar(
-            name=sentido,
-            x=etiquetas_x,
-            y=valores,
-            marker_color=paleta[i % len(paleta)],
-        ))
-
-    # Serie "Ambos" (suma de sentidos)
-    valores_ambos = []
-    for hi, hf, _ in bloques:
-        v = sub[sub["hora_inicio"] == hi]["volumen"].sum()
-        valores_ambos.append(int(v))
-    fig.add_trace(go.Bar(
-        name="Ambos",
-        x=etiquetas_x,
-        y=valores_ambos,
-        marker_color=paleta[len(sentidos) % len(paleta)],
-    ))
-
-    fig.update_layout(
-        title=dict(
-            text=f"{titulo}<br><sub>{subtitulo}</sub>",
-            x=0.5,
-            xanchor="center",
-            font=dict(size=16),
-        ),
-        xaxis_title="",
-        yaxis_title=eje_y_label,
-        barmode="group",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0,
-                    xanchor="right", x=1.0),
-        margin=dict(l=60, r=20, t=80, b=50),
-        height=420,
-        plot_bgcolor="white",
-        yaxis=dict(gridcolor="#e0e0e0"),
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
-# Definición global de título base para todos los gráficos
-titulo_base = titulo_personalizado.strip() or "VOLUMEN TRÁNSITO"
-
-# ═════════════════════════════════════════════════════════════
-# GRÁFICO A — Censo completo por 15 min (líneas, todas las calles)
-# ═════════════════════════════════════════════════════════════
 if mapa is not None and not df_cs.empty:
+    # ── Líneas: censo completo, todas las calles ──
     st.markdown("### 📈 Distribución por 15 minutos — censo completo")
+    fig = grf.fig_lineas(df_cs, titulo_base, subtitulo_base, paleta)
+    st.plotly_chart(fig, use_container_width=True)
+    figuras.append(("Distribución por 15 minutos — censo completo", fig))
 
-    titulo_base = titulo_personalizado.strip() or "VOLUMEN TRÁNSITO"
-
-    # Eje X: todos los bloques de 15 min ordenados
-    bloques_15 = sorted(df_cs["hora_inicio"].unique())
-
-    fig_lineas = go.Figure()
-
-    # Una línea por sentido (de todas las calles)
-    sentidos_unicos = sorted(df_cs["sentido"].unique())
-    paleta_lineas = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-                     "#ff7f0e", "#8c564b", "#e377c2", "#7f7f7f"]
-
-    for i, sentido in enumerate(sentidos_unicos):
-        sub = df_cs[df_cs["sentido"] == sentido]
-        valores = []
-        for hi in bloques_15:
-            v = sub[sub["hora_inicio"] == hi]["volumen"].sum()
-            valores.append(int(v))
-
-        fig_lineas.add_trace(go.Scatter(
-            x=bloques_15,
-            y=valores,
-            mode="lines+markers",
-            name=sentido,
-            line=dict(width=2.5, color=paleta_lineas[i % len(paleta_lineas)]),
-            marker=dict(size=7),
-        ))
-
-    fig_lineas.update_layout(
-        title=dict(
-            text=f"{titulo_base}<br><sub>{subtitulo_base}</sub>",
-            x=0.5, xanchor="center", font=dict(size=16),
-        ),
-        xaxis_title="",
-        yaxis_title="VOLUMEN",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25,
-                    xanchor="center", x=0.5),
-        margin=dict(l=60, r=20, t=80, b=80),
-        height=460,
-        plot_bgcolor="white",
-        xaxis=dict(gridcolor="#f0f0f0", tickangle=-45),
-        yaxis=dict(gridcolor="#e0e0e0"),
-    )
-    st.plotly_chart(fig_lineas, use_container_width=True)
-
-
-# ═════════════════════════════════════════════════════════════
-# GRÁFICO B — Censo completo por hora (barras agrupadas)
-# ═════════════════════════════════════════════════════════════
-if mapa is not None and not df_cs.empty:
+    # ── Barras por hora, una por calle ──
     st.markdown("### 📊 Volumen por hora — censo completo")
-
-    # Agrupar bloques por hora entera (HH:00)
-    df_cs_hora = df_cs.copy()
-    df_cs_hora["hora_entera"] = df_cs_hora["hora_inicio"].str.slice(0, 2) + ":00"
-
-    # Suma por (hora_entera, calle, sentido)
-    agg_hora = df_cs_hora.groupby(
-        ["hora_entera", "calle", "sentido"], as_index=False
-    )["volumen"].sum()
-
-    horas_orden = sorted(agg_hora["hora_entera"].unique())
-    calles = sorted(agg_hora["calle"].unique())
-
-    for calle in calles:
+    agg_hora = grf.agregar_por_hora(df_cs)
+    for calle in sorted(agg_hora["calle"].unique()):
         sub_calle = agg_hora[agg_hora["calle"] == calle]
-        sentidos = sorted(sub_calle["sentido"].unique())
-        paleta_bar = ["#1f77b4", "#d62728", "#2ca02c", "#9467bd",
-                      "#ff7f0e", "#8c564b", "#e377c2"]
-
-        fig_hora = go.Figure()
-        for i, sentido in enumerate(sentidos):
-            valores = []
-            for h in horas_orden:
-                v = sub_calle[
-                    (sub_calle["hora_entera"] == h) &
-                    (sub_calle["sentido"] == sentido)
-                ]["volumen"].sum()
-                valores.append(int(v))
-            fig_hora.add_trace(go.Bar(
-                name=sentido,
-                x=horas_orden,
-                y=valores,
-                marker_color=paleta_bar[i % len(paleta_bar)],
-            ))
-
-        # Serie "Ambos" (suma de sentidos de esa calle por hora)
-        valores_ambos = []
-        for h in horas_orden:
-            v = sub_calle[sub_calle["hora_entera"] == h]["volumen"].sum()
-            valores_ambos.append(int(v))
-        fig_hora.add_trace(go.Bar(
-            name="Ambos",
-            x=horas_orden,
-            y=valores_ambos,
-            marker_color=paleta_bar[len(sentidos) % len(paleta_bar)],
-        ))
-
-        fig_hora.update_layout(
-            title=dict(
-                text=f"{titulo_base} {calle}<br><sub>{subtitulo_base}</sub>",
-                x=0.5, xanchor="center", font=dict(size=15),
-            ),
-            xaxis_title="",
-            yaxis_title="VOLUMEN HORARIO",
-            barmode="group",
-            legend=dict(orientation="h", yanchor="bottom", y=1.0,
-                        xanchor="right", x=1.0),
-            margin=dict(l=60, r=20, t=80, b=50),
-            height=420,
-            plot_bgcolor="white",
-            yaxis=dict(gridcolor="#e0e0e0"),
+        fig = grf.fig_barras_agrupadas(
+            sub_calle, "hora_entera",
+            sorted(sub_calle["hora_entera"].unique()),
+            titulo=f"{titulo_base} {calle}",
+            subtitulo=subtitulo_base,
+            eje_y="VOLUMEN HORARIO",
+            paleta=paleta,
         )
-        st.plotly_chart(fig_hora, use_container_width=True)
+        if fig is None:
+            continue
+        st.plotly_chart(fig, use_container_width=True)
+        figuras.append((f"Volumen por hora — {calle}", fig))
 
-
-# ═════════════════════════════════════════════════════════════
-# GRÁFICO C — Hora pico por 15 min (barras agrupadas, uno por calle)
-# ═════════════════════════════════════════════════════════════
-if mapa is not None and not df_cs.empty:
+    # ── Barras de 15 min en la hora pico, una por calle ──
     st.markdown("### 📊 Volumen por 15 min — hora pico")
-
     hp_ini, hp_fin = pico[0], pico[1]
-    bloques_hp_df = totales[
-        (totales["hora_inicio"] >= hp_ini) &
-        (totales["hora_fin"] <= hp_fin)
-    ][["hora_inicio", "hora_fin"]].reset_index(drop=True)
-
-    bloques_hp = [
-        (row["hora_inicio"], row["hora_fin"], row["hora_inicio"])
-        for _, row in bloques_hp_df.iterrows()
-    ]
-    etiquetas_x_hp = [b[2] for b in bloques_hp]
+    bloques_hp = totales[(totales["hora_inicio"] >= hp_ini)
+                         & (totales["hora_fin"] <= hp_fin)]
+    horas_hp = bloques_hp["hora_inicio"].tolist()
 
     if subtitulo_personalizado.strip():
         subtitulo_hp = subtitulo_personalizado.strip()
@@ -702,160 +530,70 @@ if mapa is not None and not df_cs.empty:
     else:
         subtitulo_hp = ""
 
-    calles = sorted(df_cs["calle"].unique())
-    for calle in calles:
-        _grafico_barras(
-            df_cs, calle, bloques_hp,
+    for calle in sorted(df_cs["calle"].unique()):
+        sub_calle = df_cs[df_cs["calle"] == calle]
+        fig = grf.fig_barras_agrupadas(
+            sub_calle, "hora_inicio", horas_hp,
             titulo=f"{titulo_base} {calle}",
             subtitulo=subtitulo_hp,
-            etiquetas_x=etiquetas_x_hp,
-            eje_y_label="VOLUMEN CADA 15 MINUTOS",
+            eje_y="VOLUMEN CADA 15 MINUTOS",
+            paleta=paleta,
         )
-# ═════════════════════════════════════════════════════════════
-# GRÁFICO 3 y 4 — Torta de composición (con excluidos en gris)
-# ═════════════════════════════════════════════════════════════
-def _grafico_torta(series, titulo, subtitulo=""):
-    """Torta de composición. Incluye TODOS los tipos (excluidos o no)."""
-    if series is None or series.empty or series.sum() == 0:
-        st.info("Sin datos para graficar.")
-        return
+        if fig is None:
+            continue
+        st.plotly_chart(fig, use_container_width=True)
+        figuras.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
+else:
+    st.info("Sin hoja MAPA o sin movimientos mapeados: "
+            "se muestran solo los gráficos de composición.")
 
-    titulo_completo = titulo
-    if subtitulo:
-        titulo_completo = f"{titulo}<br><sub>{subtitulo}</sub>"
-
-    fig = go.Figure(go.Pie(
-        labels=list(series.index),
-        values=list(series.values),
-        hole=0.4,
-        textinfo="percent+label",
-        textposition="inside",
-    ))
-    fig.update_layout(
-        title=dict(text=titulo_completo, x=0.5, xanchor="center",
-                   font=dict(size=14)),
-        showlegend=True,
-        margin=dict(l=10, r=10, t=60, b=10),
-        height=400,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-
+# ── Tortas: composición por tipo (incluye tipos excluidos) ──
 st.markdown("### 🥧 Composición por tipo de vehículo")
 
-# ── Bloque 1: composición hora pico (TODOS los tipos, incluidos excluidos) ──
-# Filtramos df a los 4 bloques de la hora pico, SIN excluir nada
-df_hp_todos = df[
-    (df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])
-]
-serie_hp_todos = df_hp_todos.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
-serie_hp_todos = serie_hp_todos[serie_hp_todos > 0].sort_values(ascending=False)
+serie_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
+serie_hp = serie_hp.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
+serie_hp = serie_hp[serie_hp > 0].sort_values(ascending=False)
 
-# ── Bloque 2: composición censo completo (TODOS los tipos) ──
-serie_total_todos = df.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
-serie_total_todos = serie_total_todos[serie_total_todos > 0].sort_values(ascending=False)
+serie_total = df.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
+serie_total = serie_total[serie_total > 0].sort_values(ascending=False)
 
-# ── Render ──
-col_t1, col_t2 = st.columns(2)
+fig_t1 = grf.fig_torta(serie_hp, "Composición por tipo — hora pico",
+                       subtitulo_base, paleta)
+fig_t2 = grf.fig_torta(serie_total, "Composición por tipo — censo completo",
+                       subtitulo_base, paleta)
 
-with col_t1:
-    _grafico_torta(serie_hp_todos, "Composición por tipo — hora pico",
-                   subtitulo_base)
+col_torta1, col_torta2 = st.columns(2)
+with col_torta1:
+    if fig_t1 is not None:
+        st.plotly_chart(fig_t1, use_container_width=True)
+with col_torta2:
+    if fig_t2 is not None:
+        st.plotly_chart(fig_t2, use_container_width=True)
 
-with col_t2:
-    _grafico_torta(serie_total_todos, "Composición por tipo — censo completo",
-                   subtitulo_base)
+if fig_t1 is not None:
+    figuras.append(("Composición por tipo — hora pico", fig_t1))
+if fig_t2 is not None:
+    figuras.append(("Composición por tipo — censo completo", fig_t2))
 
-
-# ═════════════════════════════════════════════════════════════
-# GRÁFICO 5 — % pesados por movimiento (si aplica)
-# ═════════════════════════════════════════════════════════════
+# ── % de pesados ──
 if pesados_hp is not None:
     st.markdown("### 📊 % de pesados por movimiento — hora pico")
-    pct_row = pesados_hp.loc["% pesados"]
-    pct_row = pct_row[[c for c in pct_row.index if c != "Total"]]
-    pct_row = pct_row[pct_row > 0].sort_values(ascending=True)
-
-    if len(pct_row) > 0:
-        fig_pct = px.bar(
-            x=pct_row.values,
-            y=pct_row.index,
-            orientation="h",
-            labels={"x": "% pesados", "y": "Movimiento"},
-            color=pct_row.values,
-            color_continuous_scale="Reds",
-        )
-        fig_pct.update_layout(
-            margin=dict(l=10, r=10, t=10, b=10),
-            height=max(300, len(pct_row) * 25),
-            showlegend=False,
-            coloraxis_showscale=False,
-        )
-        st.plotly_chart(fig_pct, use_container_width=True)
+    fig_pesados = grf.fig_pesados(pesados_hp, paleta)
+    if fig_pesados is not None:
+        st.plotly_chart(fig_pesados, use_container_width=True)
+        figuras.append(("% de pesados por movimiento — hora pico",
+                        fig_pesados))
     else:
         st.info("No hay movimientos con pesados para graficar.")
 
+
 # ─────────────────────────────────────────────────────────────
-# 5c) Croquis
+# 8) Croquis
 # ─────────────────────────────────────────────────────────────
 st.divider()
 st.subheader("🗺️ Croquis de la intersección")
 
-
-# ── Mapeo de sentido → rama de ORIGEN del croquis ──
-# "Norte-Sur" = los vehículos vienen del norte  → entran por la rama N
-# "Sur-Norte" = vienen del sur                  → entran por la rama S
-# "Este-Oeste"= vienen del este                 → entran por la rama E
-# "Oeste-Este"= vienen del oeste                → entran por la rama O
-# ── Mapeo FIJO de movimientos a posiciones del croquis ──
-# NORTE:  9, 8, 7  (izq a der)
-# SUR:   10, 11, 12 (izq a der)
-# ESTE:   4, 5, 6   (arriba a abajo)
-# OESTE:  1, 2, 3   (arriba a abajo)
-MAPEO_FIJO = {
-    "M9":  "N_IZQ",  "M8":  "N_FTE",  "M7":  "N_DER",
-    "M10": "S_IZQ",  "M11": "S_FTE",  "M12": "S_DER",
-    "M4":  "E_IZQ",  "M5":  "E_FTE",  "M6":  "E_DER",
-    "M1":  "O_IZQ",  "M2":  "O_FTE",  "M3":  "O_DER",
-}
-
-
-def _inferir_nombres_ramas(mapa_df, movs_activos):
-    """
-    Devuelve {"N": "Fiambalá Norte", ...} inferido del MAPA,
-    mirando a qué rama del croquis va cada movimiento según MAPEO_FIJO.
-    """
-    nombres = {"N": "", "S": "", "E": "", "O": ""}
-    if mapa_df is None:
-        for k in nombres:
-            nombres[k] = {"N": "Norte", "S": "Sur",
-                          "E": "Este", "O": "Oeste"}[k]
-        return nombres
-
-    for _, row in mapa_df.iterrows():
-        mov = str(row["movimiento"]).strip()
-        if mov not in movs_activos or mov not in MAPEO_FIJO:
-            continue
-        rama = MAPEO_FIJO[mov].split("_")[0]
-        if not nombres[rama]:
-            calle = str(row["calle"]).strip()
-            sufijo = {"N": "Norte", "S": "Sur",
-                      "E": "Este", "O": "Oeste"}[rama]
-            nombres[rama] = f"{calle} {sufijo}"
-
-    # Fallback
-    for k in nombres:
-        if not nombres[k]:
-            nombres[k] = {"N": "Norte", "S": "Sur",
-                          "E": "Este", "O": "Oeste"}[k]
-    return nombres
-
-
-def _inferir_mapeo_default(mapa_df, movs_activos):
-    """Devuelve el mapeo fijo para los movimientos que existan."""
-    return {m: p for m, p in MAPEO_FIJO.items() if m in movs_activos}
-
-# ── Inferencias ──
+# ── Inferencias desde el MAPA ──
 nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
 mapeo_default = _inferir_mapeo_default(mapa, movs)
 
@@ -878,16 +616,10 @@ with c4:
 
 nombres_ramas = {"N": nombre_N, "S": nombre_S, "E": nombre_E, "O": nombre_O}
 
-# ── Mapeo movimiento → posición canónica ──
+# ── Mapeo movimiento → posición canónica del croquis ──
 st.markdown("**Mapeo de movimientos** (a qué flecha del croquis va cada uno)")
 
-OPCIONES_MAPEO = [
-    "— (no mostrar)",
-    "N_IZQ", "N_FTE", "N_DER",
-    "S_IZQ", "S_FTE", "S_DER",
-    "E_IZQ", "E_FTE", "E_DER",
-    "O_IZQ", "O_FTE", "O_DER",
-]
+OPCIONES_MAPEO = ["— (no mostrar)"] + list(crq.ORDEN_CANONICO)
 
 mapeo_final = {}
 cols_mapeo = st.columns(4)
@@ -895,12 +627,10 @@ for i, mov in enumerate(movs):
     with cols_mapeo[i % 4]:
         default = mapeo_default.get(mov, "— (no mostrar)")
         idx = OPCIONES_MAPEO.index(default) if default in OPCIONES_MAPEO else 0
-        seleccion = st.selectbox(
-            f"{mov}", OPCIONES_MAPEO, index=idx, key=f"map_{mov}"
-        )
+        seleccion = st.selectbox(f"{mov}", OPCIONES_MAPEO, index=idx,
+                                 key=f"map_{mov}")
         if seleccion != "— (no mostrar)":
             mapeo_final[mov] = seleccion
-
 
 # ── Volúmenes ──
 # Hora pico: desde resumen_plano (ya excluye tipos configurados)
@@ -908,18 +638,12 @@ movs_hp = [c for c in resumen_plano.columns if c != "TOTAL"]
 tipos_validos = [t for t in resumen_plano.index
                  if t != "TOTAL" and t not in excluidos_final]
 
-volumenes_hp = {}
-for mov in movs_hp:
-    if mov in mapeo_final:
-        volumenes_hp[mov] = int(resumen_plano.loc[tipos_validos, mov].sum())
+volumenes_hp = {mov: int(resumen_plano.loc[tipos_validos, mov].sum())
+                for mov in movs_hp if mov in mapeo_final}
 
 # Total del censo: desde df (excluyendo tipos configurados)
-df_validos = df[~df["tipo_vehiculo"].isin(excluidos_final)]
-volumenes_total = {}
-for mov in movs:
-    if mov in mapeo_final:
-        volumenes_total[mov] = int(df_validos[mov].sum())
-
+volumenes_total = {mov: int(df_validos[mov].sum())
+                   for mov in movs if mov in mapeo_final}
 
 # ── Render de los dos croquis ──
 if mapa is not None and len(mapeo_final) > 0:
@@ -931,6 +655,7 @@ if mapa is not None and len(mapeo_final) > 0:
         titulo=f"Hora pico {pico[0]}–{pico[1]}",
     )
     st.plotly_chart(fig_hp, use_container_width=True)
+    figuras.append(("Croquis — hora pico", fig_hp))
 
     st.markdown("### 🚦 Croquis — total del censo")
     fig_total = crq.dibujar_croquis_cruz(
@@ -940,19 +665,83 @@ if mapa is not None and len(mapeo_final) > 0:
         titulo="Total del censo",
     )
     st.plotly_chart(fig_total, use_container_width=True)
+    figuras.append(("Croquis — total del censo", fig_total))
 else:
     st.info("Sin hoja MAPA o sin movimientos mapeados: "
             "no se puede generar el croquis.")
 
+
 # ─────────────────────────────────────────────────────────────
-# 6) Descarga
+# 9) Descargas
 # ─────────────────────────────────────────────────────────────
 st.divider()
-nombre_salida = f"resultado_{Path(archivo.name).stem}.xlsx"
+st.subheader("⬇️ Descargas")
+
+nombre_base = Path(archivo.name).stem
+
 st.download_button(
     label="⬇️ Descargar Excel con todos los resultados",
-    data=salida_buffer,
-    file_name=nombre_salida,
+    data=salida_buffer.getvalue(),
+    file_name=f"resultado_{nombre_base}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     type="primary",
 )
+
+# ── Reportes PDF / DOCX ──
+imagenes = _imagenes_reporte(figuras)
+if figuras and not any(png for _, png in imagenes):
+    st.warning("⚠️ No se pudieron renderizar las imágenes de los gráficos "
+               "(kaleido). Los reportes se generarán sin gráficos.")
+
+ctx_reporte = {
+    "titulo": titulo_base,
+    "subtitulo": subtitulo_base,
+    "fecha": fecha_sel,
+    "dia": dia_txt,
+    "ubicacion": ubicacion_txt,
+    "lugar": lugar_txt,
+    "analista": analista_txt,
+    "fhp_data": fhp_data,
+    "resumen_agr": resumen_agr,
+    "resumen_plano": resumen_plano,
+    "pesados_hp": pesados_hp,
+    "totales": totales,
+    "excluidos": excluidos_final,
+    "imagenes": imagenes,
+}
+
+col_pdf, col_docx = st.columns(2)
+
+with col_pdf:
+    try:
+        pdf_bytes = _generar_pdf(ctx_reporte)
+        st.download_button(
+            label="⬇️ Descargar reporte PDF",
+            data=pdf_bytes,
+            file_name=f"reporte_{nombre_base}.pdf",
+            mime="application/pdf",
+            type="primary",
+            use_container_width=True,
+        )
+    except Exception as e:
+        st.error(f"❌ No se pudo generar el PDF: {e}")
+
+with col_docx:
+    try:
+        docx_bytes = _generar_docx(ctx_reporte)
+        st.download_button(
+            label="⬇️ Descargar reporte DOCX",
+            data=docx_bytes,
+            file_name=f"reporte_{nombre_base}.docx",
+            mime="application/vnd.openxmlformats-officedocument"
+                 ".wordprocessingml.document",
+            use_container_width=True,
+        )
+    except Exception as e:
+        st.error(f"❌ No se pudo generar el DOCX: {e}")
+
+
+
+
+
+
