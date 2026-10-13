@@ -36,6 +36,19 @@ def _titulo(titulo, subtitulo):
     return titulo
 
 
+def _safe_int(valor):
+    """Convierte a int tratando NaN/None/False como cero."""
+    try:
+        if valor is None:
+            return 0
+        if isinstance(valor, float) and pd.isna(valor):
+            return 0
+        if isinstance(valor, bool):
+            return int(valor)
+        return int(valor)
+    except (TypeError, ValueError):
+        return 0
+
 def _layout_barras(titulo, subtitulo, eje_y, height=420):
     return dict(
         title=dict(text=_titulo(titulo, subtitulo), x=0.5, xanchor="center",
@@ -109,7 +122,7 @@ def fig_barras_agrupadas(df, col_periodo, periodos, titulo, subtitulo,
 
     fig = go.Figure()
     for i, sentido in enumerate(piv.columns):
-        valores = [int(piv[sentido].get(p, 0)) for p in periodos]
+        valores = [_safe_int(piv[sentido].get(p, 0)) for p in periodos]
         fig.add_trace(go.Bar(
             name=sentido,
             x=list(periodos),
@@ -121,7 +134,7 @@ def fig_barras_agrupadas(df, col_periodo, periodos, titulo, subtitulo,
     fig.add_trace(go.Bar(
         name="Ambos",
         x=list(periodos),
-        y=[int(totales.get(p, 0)) for p in periodos],
+        y=[_safe_int(totales.get(p, 0)) for p in periodos],
         marker_color=_color(paleta, len(piv.columns)),
     ))
 
@@ -138,7 +151,7 @@ def fig_lineas(df_cs, titulo, subtitulo, paleta=None):
 
     fig = go.Figure()
     for i, sentido in enumerate(piv.columns):
-        valores = [int(piv[sentido].get(b, 0)) for b in bloques]
+        valores = [_safe_int(piv[sentido].get(b, 0)) for b in bloques]
         fig.add_trace(go.Scatter(
             x=bloques,
             y=valores,
