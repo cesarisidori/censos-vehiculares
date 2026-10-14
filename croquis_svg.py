@@ -41,6 +41,15 @@ SLOTS_INVALIDOS_T = {"S_FTE", "O_IZQ", "E_DER"}
 POSICIONES_T = ["S_IZQ", "S_DER", "O_FTE", "O_DER", "E_IZQ", "E_FTE"]
 POSICIONES_RUTA = ["O_IZQ", "O_FTE"]
 
+# Orden canonico de las 12 posiciones de la cruz. Lo usan los selectores
+# de mapeo de la app (mismo orden que croquis.py).
+ORDEN_CANONICO = [
+    "N_IZQ", "N_FTE", "N_DER",
+    "S_IZQ", "S_FTE", "S_DER",
+    "E_IZQ", "E_FTE", "E_DER",
+    "O_IZQ", "O_FTE", "O_DER",
+]
+
 GUION = chr(8212)  # — (se usa en slots inválidos / vacíos)
 
 

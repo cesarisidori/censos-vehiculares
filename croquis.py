@@ -1,6 +1,10 @@
 """
 croquis.py
 ----------
+OBSOLETO - modulo viejo basado en Plotly. Usar croquis_svg.py.
+Se conserva como legacy mientras test_croquis.py y test_reportes.py
+lo referencian. Ver migracion Plotly -> SVG.
+
 Croquis de intersección en cruz (12 movimientos) al estilo "ingeniería vial".
 
 Cada rama tiene:

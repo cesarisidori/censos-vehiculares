@@ -12,7 +12,6 @@ from pathlib import Path
 import pandas as pd
 import streamlit as st
 
-import croquis as crq
 import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
@@ -684,9 +683,9 @@ else:
 st.markdown("**Mapeo de movimientos** (a qué flecha del croquis va cada uno)")
 
 if tipo_croquis == "Cruz":
-    opciones_mapeo = list(crq.ORDEN_CANONICO)
+    opciones_mapeo = list(croquis_svg.ORDEN_CANONICO)
 elif tipo_croquis == "T":
-    opciones_mapeo = [p for p in crq.ORDEN_CANONICO
+    opciones_mapeo = [p for p in croquis_svg.ORDEN_CANONICO
                       if p not in croquis_svg.SLOTS_INVALIDOS_T
                       and not p.startswith("N_")]
 else:
