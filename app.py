@@ -16,6 +16,7 @@ import croquis as crq
 import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
+import croquis_svg
 
 # ─────────────────────────────────────────────────────────────
 # Configuración de página
@@ -647,29 +648,31 @@ volumenes_total = {mov: int(df_validos[mov].sum())
 
 # ── Render de los dos croquis ──
 if mapa is not None and len(mapeo_final) > 0:
+    # ── Croquis hora pico ──
     st.markdown("### 🚦 Croquis — hora pico")
-    fig_hp = crq.dibujar_croquis_cruz(
+    svg_hp = croquis_svg.renderizar_svg_cruz(
         volumenes=volumenes_hp,
         mapeo=mapeo_final,
         nombres_ramas=nombres_ramas,
-        titulo=f"Hora pico {pico[0]}–{pico[1]}",
+        ruta_svg="assets/croquis_cruz.svg",
     )
-    st.plotly_chart(fig_hp, use_container_width=True)
-    figuras.append(("Croquis — hora pico", fig_hp))
+    st.markdown(
+        f'<div style="max-width:750px; margin:0 auto;">{svg_hp}</div>',
+        unsafe_allow_html=True,
+    )
 
+    # ── Croquis total ──
     st.markdown("### 🚦 Croquis — total del censo")
-    fig_total = crq.dibujar_croquis_cruz(
+    svg_total = croquis_svg.renderizar_svg_cruz(
         volumenes=volumenes_total,
         mapeo=mapeo_final,
         nombres_ramas=nombres_ramas,
-        titulo="Total del censo",
+        ruta_svg="assets/croquis_cruz.svg",
     )
-    st.plotly_chart(fig_total, use_container_width=True)
-    figuras.append(("Croquis — total del censo", fig_total))
-else:
-    st.info("Sin hoja MAPA o sin movimientos mapeados: "
-            "no se puede generar el croquis.")
-
+    st.markdown(
+        f'<div style="max-width:750px; margin:0 auto;">{svg_total}</div>',
+        unsafe_allow_html=True,
+    )
 
 # ─────────────────────────────────────────────────────────────
 # 9) Descargas

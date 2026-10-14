@@ -88,24 +88,26 @@ if res["pesados_hp"] is not None:
     if fig:
         figuras.append(("% de pesados por movimiento — hora pico", fig))
 
-# ── 3) Croquis (valida kaleido con shapes + annotations) ──
-MAPEO_EJEMPLO = {
-    "M9": "N_IZQ", "M8": "N_FTE", "M7": "N_DER",
-    "M10": "S_IZQ", "M11": "S_FTE", "M12": "S_DER",
-    "M4": "E_IZQ", "M5": "E_FTE", "M6": "E_DER",
-    "M1": "O_IZQ", "M2": "O_FTE", "M3": "O_DER",
-}
-mapeo_croquis = {m: p for m, p in MAPEO_EJEMPLO.items()
-                 if m in res["df"].columns}
-if mapeo_croquis:
-    volumenes = {m: int(df_validos[m].sum()) for m in mapeo_croquis}
-    fig = crq.dibujar_croquis_cruz(
-        volumenes=volumenes,
-        mapeo=mapeo_croquis,
-        nombres_ramas={"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"},
-        titulo="Croquis — hora pico",
-    )
-    figuras.append(("Croquis — hora pico", fig))
+# ── 3) Croquis — DESHABILITADO: el croquis no se incluye en los reportes
+#    (se muestra solo en la app). Para re-validar kaleido con shapes +
+#    annotations, descomentar el bloque siguiente.
+# MAPEO_EJEMPLO = {
+#     "M9": "N_IZQ", "M8": "N_FTE", "M7": "N_DER",
+#     "M10": "S_IZQ", "M11": "S_FTE", "M12": "S_DER",
+#     "M4": "E_IZQ", "M5": "E_FTE", "M6": "E_DER",
+#     "M1": "O_IZQ", "M2": "O_FTE", "M3": "O_DER",
+# }
+# mapeo_croquis = {m: p for m, p in MAPEO_EJEMPLO.items()
+#                  if m in res["df"].columns}
+# if mapeo_croquis:
+#     volumenes = {m: int(df_validos[m].sum()) for m in mapeo_croquis}
+#     fig = crq.dibujar_croquis_cruz(
+#         volumenes=volumenes,
+#         mapeo=mapeo_croquis,
+#         nombres_ramas={"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"},
+#         titulo="Croquis — hora pico",
+#     )
+#     figuras.append(("Croquis — hora pico", fig))
 
 # ── 4) Figuras → PNG (kaleido) ──
 imagenes = []
