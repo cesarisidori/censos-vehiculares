@@ -17,8 +17,8 @@ venv/
 *.xls
 *.csv
 
-# Pero sí querés subir el ejemplo
-!censo_ejemplo.xlsx
+# Pero sí querés subir los ejemplos
+!censo_ejemplo*.xlsx
 
 # Plotly
 *.html

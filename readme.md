@@ -9,7 +9,11 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
 - Genera resumen agrupado por calle/sentido.
 - Calcula % de vehículos pesados.
 - Gráficos interactivos (líneas, barras, tortas) con **paleta de colores personalizable**.
-- Croquis de intersección en cruz con Entrada/Salida por rama.
+- Croquis de la intersección (**Cruz**, **T** o **Ruta** — el tipo se
+  infiere del MAPA y es sobrescribible) con Entrada/Salida por rama,
+  más una sección de referencia con los 3 esquemas.
+- El MAPA es la fuente de verdad: los movimientos de DATOS sin fila en
+  MAPA se ignoran en todos los cálculos y gráficos.
 - Carga manual de **Fecha, Día, Ubicación, Lugar y Analista** para el reporte.
 - Descarga de resultados en **Excel**, **PDF** (con fuente DejaVu embebida)
   y **DOCX** (fuente Arial, se abre en Word y LibreOffice).
@@ -42,7 +46,13 @@ los campos homónimos del reporte (opcional).
 ## Tests manuales
 
 ```bash
-python procesar_censo3.py censo_ejemplo.xlsx --verbose   # motor por consola
-python test_croquis.py                                   # croquis → croquis_preview.html
-python test_reportes.py                                  # reportes → test_reporte.pdf/.docx
+python3 crear_ejemplo.py                                    # regenera los 3 ejemplos
+python3 procesar_censo3.py censo_ejemplo_cruz.xlsx --verbose   # motor por consola
+python3 test_croquis.py                                    # croquis → croquis_preview.html
+python3 test_reportes.py                                   # reportes → test_reporte.pdf/.docx
 ```
+
+Hay 3 archivos de ejemplo, uno por tipo de croquis:
+`censo_ejemplo_cruz.xlsx` (12 movimientos, 4 ramas),
+`censo_ejemplo_T.xlsx` (9 movimientos, sin rama Norte) y
+`censo_ejemplo_ruta.xlsx` (2 movimientos, ida y vuelta).

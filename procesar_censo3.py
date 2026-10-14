@@ -373,6 +373,18 @@ def procesar(ruta, excluidos=None, nombre_fila_total=None,
     mapa = leer_mapa(ruta)
     df, movs = leer_datos(ruta)
 
+    # El MAPA es la fuente de verdad: los movimientos de DATOS que no
+    # tienen fila en MAPA se ignoran en todo el pipeline (totales, hora
+    # pico, FHP, resúmenes, pesados y — vía res["movs"] — también en la
+    # app: gráficos, croquis y reportes).
+    if mapa is not None and len(mapa) > 0:
+        movs_mapa = {str(m).strip() for m in mapa["movimiento"]}
+        huerfanos = [m for m in movs if m not in movs_mapa]
+        if huerfanos:
+            print(f"ℹ️  Ignorados {len(huerfanos)} movimientos sin fila en "
+                  f"MAPA: {', '.join(huerfanos)}")
+            movs = [m for m in movs if m in movs_mapa]
+
     totales = totales_15min(df, movs, excluidos)
     pico = detectar_hora_pico(totales, VENTANA_PICO)
     fhp_data = calcular_fhp(totales, pico[0], pico[1], VENTANA_PICO)

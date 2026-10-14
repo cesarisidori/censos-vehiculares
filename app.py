@@ -225,6 +225,37 @@ def _inferir_mapeo_default(mapa_df, movs_activos):
     return {m: p for m, p in MAPEO_FIJO.items() if m in movs_activos}
 
 
+def _inferir_tipo_croquis(mapa_df, movs_activos):
+    """
+    Infere el tipo de croquis por ESTRUCTURA del MAPA: cuenta las ramas
+    distintas (N/S/E/O) a las que van los movimientos activos según
+    MAPEO_FIJO. 4 ramas → "Cruz", 3 → "T", ≤2 → "Ruta".
+    """
+    if mapa_df is None:
+        return "Cruz"
+    movs_mapa = {str(m).strip() for m in mapa_df["movimiento"]}
+    ramas = {
+        MAPEO_FIJO[m].split("_")[0]
+        for m in movs_activos
+        if m in movs_mapa and m in MAPEO_FIJO
+    }
+    if len(ramas) >= 4:
+        return "Cruz"
+    if len(ramas) == 3:
+        return "T"
+    return "Ruta"
+
+
+def _render_croquis(tipo, volumenes, mapeo, nombres_ramas, nombres_extremos):
+    """Dispatch: renderiza el SVG correspondiente al tipo de croquis."""
+    if tipo == "T":
+        return croquis_svg.renderizar_svg_T(volumenes, mapeo, nombres_ramas)
+    if tipo == "Ruta":
+        return croquis_svg.renderizar_svg_ruta(volumenes, mapeo,
+                                               nombres_extremos)
+    return croquis_svg.renderizar_svg_cruz(volumenes, mapeo, nombres_ramas)
+
+
 # ─────────────────────────────────────────────────────────────
 # 1) Carga del archivo
 # ─────────────────────────────────────────────────────────────
@@ -594,33 +625,74 @@ if pesados_hp is not None:
 st.divider()
 st.subheader("🗺️ Croquis de la intersección")
 
+# ── Referencia visual: qué representa cada M en cada tipo ──
+with st.expander("📖 ¿Qué movimiento es cada M?"):
+    st.caption("Esquemas de referencia (sin valores). El mapeo concreto "
+               "se configura más abajo.")
+    for titulo, ruta in [
+        ("Cruz — 4 ramas (N, S, E, O)", "assets/croquis_cruz.svg"),
+        ("T — 3 ramas (S, O, E; sin Norte)", "assets/croquis_T.svg"),
+        ("Ruta — ida y vuelta", "assets/croquis_ruta.svg"),
+    ]:
+        st.markdown(f"**{titulo}**")
+        st.markdown(
+            f'<div style="max-width:750px; margin:0 auto;">'
+            f'{croquis_svg.leer_svg_esquema(ruta)}</div>',
+            unsafe_allow_html=True,
+        )
+
 # ── Inferencias desde el MAPA ──
 nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
 mapeo_default = _inferir_mapeo_default(mapa, movs)
 
-# ── Nombres de ramas (editables) ──
-st.markdown("**Nombres de las ramas** (editables)")
+# ── Tipo de croquis (inferido; sobrescribible a mano) ──
+tipo_inferido = _inferir_tipo_croquis(mapa, movs)
+tipo_croquis = st.selectbox(
+    "Tipo de croquis (inferido del MAPA; podés cambiarlo)",
+    ["Cruz", "T", "Ruta"],
+    index=["Cruz", "T", "Ruta"].index(tipo_inferido),
+)
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    nombre_N = st.text_input("Rama Norte", value=nombres_inferidos["N"],
-                             key="nom_N")
-with c2:
-    nombre_S = st.text_input("Rama Sur", value=nombres_inferidos["S"],
-                             key="nom_S")
-with c3:
-    nombre_E = st.text_input("Rama Este", value=nombres_inferidos["E"],
-                             key="nom_E")
-with c4:
-    nombre_O = st.text_input("Rama Oeste", value=nombres_inferidos["O"],
-                             key="nom_O")
+# ── Nombres de ramas / extremos (editables, según el tipo) ──
+nombres_ramas = {}
+nombres_extremos = {}
+if tipo_croquis == "Ruta":
+    st.markdown("**Nombres de los extremos** (editables)")
+    c1, c2 = st.columns(2)
+    with c1:
+        nombre_oeste = st.text_input("Extremo Oeste",
+                                     value=nombres_inferidos["O"],
+                                     key="nom_O")
+    with c2:
+        nombre_este = st.text_input("Extremo Este",
+                                    value=nombres_inferidos["E"],
+                                    key="nom_E")
+    nombres_extremos = {"O": nombre_oeste, "E": nombre_este}
+else:
+    ramas_ui = ["S", "E", "O"] if tipo_croquis == "T" else ["N", "S", "E", "O"]
+    st.markdown("**Nombres de las ramas** (editables)")
+    cols = st.columns(len(ramas_ui))
+    for col, rama in zip(cols, ramas_ui):
+        with col:
+            nombres_ramas[rama] = st.text_input(
+                f"Rama {nombres_inferidos[rama].title()}",
+                value=nombres_inferidos[rama],
+                key=f"nom_{rama}",
+            )
 
-nombres_ramas = {"N": nombre_N, "S": nombre_S, "E": nombre_E, "O": nombre_O}
-
-# ── Mapeo movimiento → posición canónica del croquis ──
+# ── Mapeo movimiento → posición del croquis ──
 st.markdown("**Mapeo de movimientos** (a qué flecha del croquis va cada uno)")
 
-OPCIONES_MAPEO = ["— (no mostrar)"] + list(crq.ORDEN_CANONICO)
+if tipo_croquis == "Cruz":
+    opciones_mapeo = list(crq.ORDEN_CANONICO)
+elif tipo_croquis == "T":
+    opciones_mapeo = [p for p in crq.ORDEN_CANONICO
+                      if p not in croquis_svg.SLOTS_INVALIDOS_T
+                      and not p.startswith("N_")]
+else:
+    opciones_mapeo = list(croquis_svg.POSICIONES_RUTA)
+
+OPCIONES_MAPEO = ["— (no mostrar)"] + opciones_mapeo
 
 mapeo_final = {}
 cols_mapeo = st.columns(4)
@@ -648,29 +720,25 @@ volumenes_total = {mov: int(df_validos[mov].sum())
 
 # ── Render de los dos croquis ──
 if mapa is not None and len(mapeo_final) > 0:
+    ancho_contenedor = "900px" if tipo_croquis == "Ruta" else "750px"
+
     # ── Croquis hora pico ──
-    st.markdown("### 🚦 Croquis — hora pico")
-    svg_hp = croquis_svg.renderizar_svg_cruz(
-        volumenes=volumenes_hp,
-        mapeo=mapeo_final,
-        nombres_ramas=nombres_ramas,
-        ruta_svg="assets/croquis_cruz.svg",
-    )
+    st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
+    svg_hp = _render_croquis(tipo_croquis, volumenes_hp, mapeo_final,
+                             nombres_ramas, nombres_extremos)
     st.markdown(
-        f'<div style="max-width:750px; margin:0 auto;">{svg_hp}</div>',
+        f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
+        f'{svg_hp}</div>',
         unsafe_allow_html=True,
     )
 
     # ── Croquis total ──
-    st.markdown("### 🚦 Croquis — total del censo")
-    svg_total = croquis_svg.renderizar_svg_cruz(
-        volumenes=volumenes_total,
-        mapeo=mapeo_final,
-        nombres_ramas=nombres_ramas,
-        ruta_svg="assets/croquis_cruz.svg",
-    )
+    st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
+    svg_total = _render_croquis(tipo_croquis, volumenes_total, mapeo_final,
+                                nombres_ramas, nombres_extremos)
     st.markdown(
-        f'<div style="max-width:750px; margin:0 auto;">{svg_total}</div>',
+        f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
+        f'{svg_total}</div>',
         unsafe_allow_html=True,
     )
 

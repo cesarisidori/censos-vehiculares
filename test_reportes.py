@@ -1,5 +1,5 @@
 """
-test_reportes.py — Genera PDF y DOCX de prueba con censo_ejemplo.xlsx.
+test_reportes.py — Genera PDF y DOCX de prueba con censo_ejemplo_cruz.xlsx.
 
 Uso:
     python3 test_reportes.py
@@ -19,7 +19,7 @@ import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
 
-RUTA = Path(__file__).with_name("censo_ejemplo.xlsx")
+RUTA = Path(__file__).with_name("censo_ejemplo_cruz.xlsx")
 
 TITULO = "VOLUMEN TRÁNSITO"
 SUBTITULO = "DOMINGO 26 DE JULIO DE 2026"
