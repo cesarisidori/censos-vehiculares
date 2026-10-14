@@ -27,12 +27,7 @@ FHP, % de pesados, y genera gráficos y croquis de intersección.
   desde `fonts/`) y DOCX (python-docx, **Arial**). Convierte figuras a PNG con
   kaleido.
 - `croquis.py` — Dibuja el croquis de la intersección en cruz con Plotly.
-- `croquis_svg.py` — Renderiza los croquis SVG (`assets/`): Cruz, T y Ruta.
-  Reemplaza valores en los `<text id="...">` y calcula Entrada/Salida.
-  La T ignora la rama Norte; los slots inválidos (`S_FTE`, `O_IZQ`,
-  `E_DER`) se muestran con "—".
-- `crear_ejemplo.py` — Genera los 3 ejemplos: `censo_ejemplo_cruz.xlsx`,
-  `censo_ejemplo_T.xlsx` y `censo_ejemplo_ruta.xlsx`.
+- `crear_ejemplo.py` — Genera `censo_ejemplo.xlsx` con datos de prueba.
 - `test_croquis.py` — Test manual: genera `croquis_preview.html`.
 - `test_reportes.py` — Test manual: genera `test_reporte.pdf` y `test_reporte.docx`.
 - `fonts/` — DejaVuSans.ttf (+ Bold) para embeber en el PDF.
@@ -48,11 +43,8 @@ Esto permite que Streamlit maneje la UI mientras el motor permanece agnóstico.
 - El motor (`procesar_censo3.py`) **NO** debe importar `openpyxl` ni `pandas.read_excel`.
 - Los tipos de vehículo, calles, sentidos y movimientos son **dinámicos**.
   NUNCA hardcodear listas de tipos, calles o movimientos.
-- El croquis acepta 3 tipos (Cruz/T/Ruta); el tipo se infiere por la
-  cantidad de ramas del MAPA (4/3/≤2) y es sobrescribible en la app.
-  La cruz usa 12 posiciones fijas: `N_IZQ`, `N_FTE`, `N_DER`, `S_IZQ`,
-  `S_FTE`, `S_DER`, `E_IZQ`, `E_FTE`, `E_DER`, `O_IZQ`, `O_FTE`, `O_DER`.
-  La T usa 6 (`POSICIONES_T`); la ruta 2 (`POSICIONES_RUTA`).
+- El croquis usa 12 posiciones fijas: `N_IZQ`, `N_FTE`, `N_DER`, `S_IZQ`, `S_FTE`,
+  `S_DER`, `E_IZQ`, `E_FTE`, `E_DER`, `O_IZQ`, `O_FTE`, `O_DER`.
 - Tipografía de reportes fija: PDF → DejaVu **embebida** (`fonts/`); DOCX → **Arial**.
   NO cambiarla (nada de Calibri, Helvetica ni Segoe UI).
 - En `requirements.txt`, `plotly`/`kaleido`/`reportlab`/`python-docx` van **con
@@ -63,15 +55,12 @@ Esto permite que Streamlit maneje la UI mientras el motor permanece agnóstico.
 - FHP = Volumen HP / (4 × Volumen máximo de 15 min dentro de la HP).
 - Tipos excluidos (bicis, peatones) **NO** suman en totales, hora pico ni FHP.
 - Los nombres de hojas del Excel son exactos: `DATOS`, `MAPA`, `CONFIG`.
-- El croquis calcula Entrada/Salida según la tabla de destinos en
-  `croquis_svg.py` (`DESTINO` para la cruz, `DESTINO_T` para la T).
-  Si modificás esas tablas, verificá los valores con la app.
+- El croquis calcula Entrada/Salida según la tabla de destinos en `croquis.py`.
+  Si modificás esa tabla, verificá los totales con `test_croquis.py`.
 
 ## Testing
-- Para probar la app: `streamlit run app.py`, subir uno de los
-  `censo_ejemplo_{cruz,T,ruta}.xlsx`, procesar.
-- Para probar el motor solo:
-  `python3 procesar_censo3.py censo_ejemplo_cruz.xlsx --verbose`.
+- Para probar la app: `streamlit run app.py`, subir `censo_ejemplo.xlsx`, procesar.
+- Para probar el motor solo: `python procesar_censo3.py censo_ejemplo.xlsx --verbose`.
 - Para probar el croquis: `python test_croquis.py` y abrir `croquis_preview.html`.
 - Para probar los reportes: `python test_reportes.py` → `test_reporte.pdf` / `test_reporte.docx`.
 - NO hay suite de tests automáticos. Cualquier cambio debe verificarse manualmente.
