@@ -5,6 +5,7 @@ Ejecutar:
     streamlit run app.py
 """
 
+import hashlib
 import io
 from datetime import date, datetime
 from pathlib import Path
@@ -78,6 +79,22 @@ def _leer_estructura(contenido: bytes):
         tipos = sorted(df_datos["tipo_vehiculo"].dropna().astype(str)
                        .str.strip().unique().tolist())
     return cfg, tipos
+
+
+@st.cache_data(show_spinner=False)
+def _leer_movimientos_mapa(contenido: bytes):
+    """Lee SOLO la hoja MAPA (chica) para sugerir el tipo de croquis al subir.
+
+    Devuelve el DataFrame o None si la hoja no existe o no tiene la columna
+    'movimiento'. Rápida a propósito: no toca DATOS ni CONFIG.
+    """
+    try:
+        df = pd.read_excel(io.BytesIO(contenido), sheet_name="MAPA", dtype=str)
+    except Exception:
+        return None
+    if "movimiento" not in df.columns:
+        return None
+    return df
 
 
 @st.cache_data(show_spinner="🖼️ Preparando gráficos del reporte…")
@@ -245,6 +262,26 @@ def _inferir_tipo_croquis(mapa_df, movs_activos):
     return "Ruta"
 
 
+def _inferir_tipo_croquis_temprano(mapa_df, movs_tempranos):
+    """
+    Sugerencia híbrida de tipo de croquis al SUBIR el archivo:
+    1) Conteo de movimientos del MAPA: 12→"Cruz", 6-9→"T", 2→"Ruta".
+    2) Si el conteo no encaja en ningún caso → fallback a
+       _inferir_tipo_croquis (ramas vía MAPEO_FIJO).
+    3) Sin MAPA / sin movimientos → "Cruz".
+    """
+    if mapa_df is None or not movs_tempranos:
+        return "Cruz"
+    n = len(movs_tempranos)
+    if n == 12:
+        return "Cruz"
+    if 6 <= n <= 9:
+        return "T"
+    if n == 2:
+        return "Ruta"
+    return _inferir_tipo_croquis(mapa_df, movs_tempranos)
+
+
 def _render_croquis(tipo, volumenes, mapeo, nombres_ramas, nombres_extremos):
     """Dispatch: renderiza el SVG correspondiente al tipo de croquis."""
     if tipo == "T":
@@ -274,6 +311,15 @@ try:
 except Exception as e:
     st.error(f"❌ Error al leer el archivo: {e}")
     st.stop()
+
+# Lectura temprana del MAPA (solo esa hoja, instantáneo): permite sugerir
+# el tipo de croquis ANTES de procesar, sin correr el pipeline completo.
+mapa_temprano = _leer_movimientos_mapa(contenido)
+movs_tempranos = (
+    [str(m).strip() for m in mapa_temprano["movimiento"].dropna().unique()]
+    if mapa_temprano is not None else []
+)
+tipo_inferido = _inferir_tipo_croquis_temprano(mapa_temprano, movs_tempranos)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -416,6 +462,37 @@ with st.expander("🖌️ Paleta de colores (8 series)"):
                 f"Serie {i + 1}", grf.PALETA_DEFAULT[i],
                 key=f"color_serie_{i}",
             ))
+
+
+# ─────────────────────────────────────────────────────────────
+# 4b) Tipo de croquis (elegible ANTES de procesar)
+# ─────────────────────────────────────────────────────────────
+st.divider()
+st.subheader("⚙️ Tipo de croquis")
+
+# Al subir otro archivo, el selector vuelve al tipo inferido del archivo
+# nuevo (no queda "pegado" el tipo del anterior). Se setea ANTES de
+# instanciar el widget, como exige Streamlit.
+huella = hashlib.sha1(contenido).hexdigest()
+if st.session_state.get("_tipo_croquis_archivo") != huella:
+    st.session_state["_tipo_croquis_archivo"] = huella
+    st.session_state["tipo_croquis_sel"] = tipo_inferido
+
+tipo_croquis = st.selectbox(
+    "Tipo de croquis",
+    ["Cruz", "T", "Ruta"],
+    index=["Cruz", "T", "Ruta"].index(tipo_inferido),
+    key="tipo_croquis_sel",
+    label_visibility="collapsed",
+    help="Sugerido según la hoja MAPA. Cambialo acá y volvé a clickear "
+         "▶️ Procesar censo.",
+)
+
+if mapa_temprano is None:
+    st.caption(f"Sugerencia: {tipo_inferido} (no se detectó la hoja MAPA)")
+else:
+    st.caption(f"Sugerencia: {tipo_inferido} "
+               f"({len(movs_tempranos)} movimientos detectados)")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -644,13 +721,8 @@ with st.expander("📖 ¿Qué movimiento es cada M?"):
 nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
 mapeo_default = _inferir_mapeo_default(mapa, movs)
 
-# ── Tipo de croquis (inferido; sobrescribible a mano) ──
-tipo_inferido = _inferir_tipo_croquis(mapa, movs)
-tipo_croquis = st.selectbox(
-    "Tipo de croquis (inferido del MAPA; podés cambiarlo)",
-    ["Cruz", "T", "Ruta"],
-    index=["Cruz", "T", "Ruta"].index(tipo_inferido),
-)
+# ── Tipo de croquis: elegido ANTES de procesar (sección 4b) ──
+
 
 # ── Nombres de ramas / extremos (editables, según el tipo) ──
 nombres_ramas = {}
