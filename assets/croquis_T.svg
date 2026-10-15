@@ -347,7 +347,7 @@
        font-weight="bold"
        fill="#000000"
        style="stroke-width:0.264583">0</text><text
-       id="E_DER_nombre"
+       id="E_IZQ_nombre"
        x="149.89572"
        y="61.19569"
        text-anchor="middle"
@@ -355,7 +355,7 @@
        font-size="3.70417px"
        fill="#1f3a93"
        style="stroke-width:0.264583">M4</text><text
-       id="E_DER_volumen"
+       id="E_IZQ_volumen"
        x="157.18915"
        y="61.574993"
        text-anchor="middle"
