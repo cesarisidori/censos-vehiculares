@@ -33,8 +33,10 @@ DESTINO_T = {
 
 RAMAS_T = ("S", "O", "E")
 
-# Slots que el SVG de la T dibuja pero que no existen como movimiento
-# (flechas tachadas): se muestran siempre con guión.
+# Slots que no existen como movimiento en la T. El SVG corregido ya NO los
+# dibuja (no hay textos con esos ids). Se mantiene la constante porque la
+# usan app.py (excluir opciones del selector de mapeo) y croquis_svg.py
+# (filtrado en cálculo y render).
 SLOTS_INVALIDOS_T = {"S_FTE", "O_IZQ", "E_DER"}
 
 # Posiciones válidas para mapear movimientos en cada tipo de croquis.
@@ -55,6 +57,10 @@ GUION = chr(8212)  # — (se usa en slots inválidos / vacíos)
 
 def _reemplazar_texto(svg: str, id_: str, nuevo_valor: str) -> str:
     """Reemplaza el contenido de un <text id="...">...</text>."""
+    # Si el id no existe en el SVG (p. ej. los slots eliminados de la T),
+    # no hacemos nada: chequeo explícito en lugar del silencio de re.sub.
+    if f'id="{id_}"' not in svg:
+        return svg
     patron = (
         rf'(<text\b[^>]*\bid="{re.escape(id_)}"[^>]*>)'
         rf'(.*?)'
@@ -191,7 +197,8 @@ def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
                      ruta_svg="assets/croquis_T.svg"):
     """
     Lee el SVG de la T y reemplaza los valores dinámicos.
-    - Slots inválidos (S_FTE, O_IZQ, E_DER) → siempre guión "—".
+    - Slots inválidos (S_FTE, O_IZQ, E_DER): el SVG corregido ya no los
+      dibuja; _reemplazar_texto es tolerante y no hace nada si falta el id.
     - Slots válidos sin movimiento mapeado → también guión.
     - Entradas/salidas según DESTINO_T (sin rama Norte).
     """
