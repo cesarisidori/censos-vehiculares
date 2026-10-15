@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 import graficos as grf
 import procesar_censo3 as motor
@@ -795,22 +796,24 @@ if mapa is not None and len(mapeo_final) > 0:
 
     # ── Croquis hora pico ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
-    svg_hp = _render_croquis(tipo_croquis, volumenes_hp, mapeo_final,
-                             nombres_ramas, nombres_extremos)
-    st.markdown(
+    svg_hp_html, altura_hp = _render_croquis(tipo_croquis, volumenes_hp, mapeo_final,
+                                             nombres_ramas, nombres_extremos)
+    components.html(
         f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
-        f'{svg_hp}</div>',
-        unsafe_allow_html=True,
+        f'{svg_hp_html}</div>',
+        height=altura_hp,
+        scrolling=False,
     )
 
     # ── Croquis total ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
-    svg_total = _render_croquis(tipo_croquis, volumenes_total, mapeo_final,
-                                nombres_ramas, nombres_extremos)
-    st.markdown(
+    svg_total_html, altura_total = _render_croquis(tipo_croquis, volumenes_total, mapeo_final,
+                                                   nombres_ramas, nombres_extremos)
+    components.html(
         f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
-        f'{svg_total}</div>',
-        unsafe_allow_html=True,
+        f'{svg_total_html}</div>',
+        height=altura_total,
+        scrolling=False,
     )
 
 # ─────────────────────────────────────────────────────────────

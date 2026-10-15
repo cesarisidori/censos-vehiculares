@@ -13,6 +13,7 @@ Hay 3 tipos de croquis, cada uno con su SVG en assets/:
 """
 
 import re
+import streamlit.components.v1 as components
 
 
 # Tabla de destinos de la CRUZ (misma lógica que croquis.py)
@@ -53,6 +54,16 @@ ORDEN_CANONICO = [
 ]
 
 GUION = chr(8212)  # — (se usa en slots inválidos / vacíos)
+
+
+def _calcular_altura(svg: str, ancho_default: int = 900) -> int:
+    """Calcula la altura apropiada para un SVG basada en su viewBox."""
+    match = re.search(r'viewBox="[^"]*\s+([\d.]+)\s+([\d.]+)"', svg)
+    if match:
+        vb_ancho = float(match.group(1))
+        vb_alto = float(match.group(2))
+        return int(ancho_default * (vb_alto / vb_ancho))
+    return 600  # Default height if parsing fails
 
 
 def _reemplazar_texto(svg: str, id_: str, nuevo_valor: str) -> str:
@@ -190,7 +201,10 @@ def renderizar_svg_cruz(volumenes, mapeo, nombres_ramas,
             f"Salida: {salidas.get(rama, 0)}"
         )
 
-    return svg
+    # Calcular altura y envolver en HTML para components.html
+    altura = _calcular_altura(svg)
+    html = f'<html><body style="margin:0;padding:0;">{svg}</body></html>'
+    return html, altura
 
 
 def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
@@ -198,7 +212,7 @@ def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
     """
     Lee el SVG de la T y reemplaza los valores dinámicos.
     - Slots inválidos (S_FTE, O_IZQ, E_DER): el SVG corregido ya no los
-      dibuja; _reemplazar_texto es tolerante y no hace nada si falta el id.
+    dibuja; _reemplazar_texto es tolerante y no hace nada si falta el id.
     - Slots válidos sin movimiento mapeado → también guión.
     - Entradas/salidas según DESTINO_T (sin rama Norte).
     """
@@ -239,7 +253,10 @@ def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
             f"Salida: {salidas.get(rama, 0)}"
         )
 
-    return svg
+    # Calcular altura y envolver en HTML para components.html
+    altura = _calcular_altura(svg)
+    html = f'<html><body style="margin:0;padding:0;">{svg}</body></html>'
+    return html, altura
 
 
 def renderizar_svg_ruta(volumenes, mapeo, nombres_extremos,
@@ -274,4 +291,7 @@ def renderizar_svg_ruta(volumenes, mapeo, nombres_extremos,
         svg, "E_calle_nombre", nombres_extremos.get("E", "")
     )
 
-    return svg
+    # Calcular altura y envolver en HTML para components.html
+    altura = _calcular_altura(svg)
+    html = f'<html><body style="margin:0;padding:0;">{svg}</body></html>'
+    return html, altura
