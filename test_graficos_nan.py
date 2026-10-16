@@ -6,10 +6,11 @@ Ejecutable directamente: python test_graficos_nan.py
 """
 
 import sys
+from pathlib import Path
 import pandas as pd
 import numpy as np
 
-sys.path.insert(0, 'c:/Cesar/00_PROYECTOS_GIT/censos-vehiculares')
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import graficos
 
 

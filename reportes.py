@@ -29,8 +29,6 @@ Tipografía:
 
 import io
 import re
-import subprocess
-import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
