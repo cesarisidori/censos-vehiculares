@@ -56,17 +56,20 @@ def _safe_int(valor):
 def _layout_barras(titulo, subtitulo, eje_y, height=210, width=500):
     return dict(
         title=dict(text=_titulo(titulo, subtitulo), x=0.5, xanchor="center",
-                   font=dict(size=16)),
+                   font=dict(size=13)),
         xaxis_title="",
-        yaxis_title=eje_y,
         barmode="group",
-        legend=dict(orientation="h", yanchor="bottom", y=1.0,
-                    xanchor="right", x=1.0),
-        margin=dict(l=60, r=20, t=80, b=50),
+        legend=dict(orientation="h", yanchor="top", y=-0.28,
+                    xanchor="center", x=0.5),
+        margin=dict(l=95, r=15, t=55, b=80),
         height=height,
         width=width,
         plot_bgcolor="white",
-        yaxis=dict(gridcolor="#e0e0e0"),
+        yaxis=dict(
+            gridcolor="#e0e0e0",
+            automargin=True,
+            title=dict(text=eje_y, font=dict(size=10), standoff=10),
+        ),
     )
 
 
@@ -169,17 +172,19 @@ def fig_lineas(df_cs, titulo, subtitulo, paleta=None, width=1000, height=600):
 
     fig.update_layout(
         title=dict(text=_titulo(titulo, subtitulo), x=0.5, xanchor="center",
-                   font=dict(size=16)),
+                   font=dict(size=14)),
         xaxis_title="",
         yaxis_title="VOLUMEN",
-        legend=dict(orientation="h", yanchor="bottom", y=-0.25,
+        legend=dict(orientation="h", yanchor="top", y=-0.32,
                     xanchor="center", x=0.5),
-        margin=dict(l=60, r=20, t=80, b=80),
+        margin=dict(l=70, r=20, t=75, b=95),
         width=width,
         height=height,
         plot_bgcolor="white",
         xaxis=dict(gridcolor="#f0f0f0", tickangle=-45),
-        yaxis=dict(gridcolor="#e0e0e0"),
+        yaxis=dict(gridcolor="#e0e0e0", automargin=True,
+                   title=dict(text="VOLUMEN", font=dict(size=10),
+                              standoff=10)),
     )
     return fig
 
@@ -200,9 +205,9 @@ def fig_torta(series, titulo, subtitulo="", paleta=None):
     ))
     fig.update_layout(
         title=dict(text=_titulo(titulo, subtitulo), x=0.5, xanchor="center",
-                   font=dict(size=14)),
+                   font=dict(size=13)),
         showlegend=True,
-        margin=dict(l=10, r=10, t=60, b=10),
+        margin=dict(l=10, r=10, t=65, b=10),
         height=400,
     )
     return fig
@@ -227,7 +232,7 @@ def fig_pesados(pesados_hp, paleta=None, width=500):
     )
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10),
-        height=max(75, len(pct) * 6),
+        height=max(120, len(pct) * 10),
         width=width,
         showlegend=False,
         coloraxis_showscale=False,

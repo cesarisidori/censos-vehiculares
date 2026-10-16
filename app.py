@@ -5,6 +5,7 @@ Ejecutar:
     streamlit run app.py
 """
 
+import copy
 import hashlib
 import io
 import subprocess
@@ -132,7 +133,7 @@ def _leer_movimientos_mapa(contenido: bytes):
 
 
 def _imagenes_reporte(figuras):
-    """PNG de cada figura con mirage. Los croquis conservan su proporción."""
+    """PNG de cada figura con mirage (respeta el aspect ratio original)."""
     if not MIRAGE_OK:
         st.warning(
             "Mirage no funciona en este sistema. Los reportes se generarán "
@@ -142,13 +143,33 @@ def _imagenes_reporte(figuras):
     resultados = []
     for titulo, fig in figuras:
         try:
-            ancho = None if "Croquis" in titulo else 1100
-            png = rep.fig_a_png(fig, ancho=ancho)
+            png = rep.fig_a_png(fig)
             resultados.append((titulo, png))
         except Exception as e:
             st.error(f"Error convirtiendo {titulo}: {e}")
             resultados.append((titulo, None))
     return resultados
+
+
+def _web(fig, alto):
+    """Copia de la figura con otro alto, para achicarla SOLO en pantalla.
+
+    El `fig` original (que alimenta el reporte) queda intacto.
+    """
+    copia = copy.deepcopy(fig)
+    copia.update_layout(height=alto)
+    return copia
+
+
+def _filas_dos_columnas(figs, alto_web):
+    """Renderiza `figs` (título, figura) de a 2 por fila, 50% de ancho cada
+    uno. No modifica las figuras originales (el reporte las usa enteras)."""
+    for i in range(0, len(figs), 2):
+        cols = st.columns(2)
+        for col, (_, fig) in zip(cols, figs[i:i + 2]):
+            with col:
+                st.plotly_chart(_web(fig, alto_web), use_container_width=True)
+
 
 
 @st.cache_data(show_spinner="📄 Generando PDF…")
@@ -648,12 +669,15 @@ if mapa is not None and not df_cs.empty:
     # ── Líneas: censo completo, todas las calles ──
     st.markdown("### 📈 Distribución por 15 minutos — censo completo")
     fig = grf.fig_lineas(df_cs, titulo_base, subtitulo_base, paleta)
-    st.plotly_chart(fig, use_container_width=True)
+    _, col_cen, _ = st.columns([1, 8, 1])
+    with col_cen:
+        st.plotly_chart(_web(fig, 480), use_container_width=True)
     figuras.append(("Distribución por 15 minutos — censo completo", fig))
 
-    # ── Barras por hora, una por calle ──
+    # ── Barras por hora, una por calle (de a 2 por fila) ──
     st.markdown("### 📊 Volumen por hora — censo completo")
     agg_hora = grf.agregar_por_hora(df_cs)
+    figs_hora = []
     for calle in sorted(agg_hora["calle"].unique()):
         sub_calle = agg_hora[agg_hora["calle"] == calle]
         fig = grf.fig_barras_agrupadas(
@@ -667,10 +691,11 @@ if mapa is not None and not df_cs.empty:
         )
         if fig is None:
             continue
-        st.plotly_chart(fig, use_container_width=True)
+        figs_hora.append((f"Volumen por hora — {calle}", fig))
         figuras.append((f"Volumen por hora — {calle}", fig))
+    _filas_dos_columnas(figs_hora, 320)
 
-    # ── Barras de 15 min en la hora pico, una por calle ──
+    # ── Barras de 15 min en la hora pico, una por calle (de a 2 por fila) ──
     st.markdown("### 📊 Volumen por 15 min — hora pico")
     hp_ini, hp_fin = pico[0], pico[1]
     bloques_hp = totales[(totales["hora_inicio"] >= hp_ini) & (totales["hora_fin"] <= hp_fin)]
@@ -683,6 +708,7 @@ if mapa is not None and not df_cs.empty:
     else:
         subtitulo_hp = ""
 
+    figs_15 = []
     for calle in sorted(df_cs["calle"].unique()):
         sub_calle = df_cs[df_cs["calle"] == calle]
         fig = grf.fig_barras_agrupadas(
@@ -695,8 +721,9 @@ if mapa is not None and not df_cs.empty:
         )
         if fig is None:
             continue
-        st.plotly_chart(fig, use_container_width=True)
+        figs_15.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
         figuras.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
+    _filas_dos_columnas(figs_15, 320)
 else:
     st.info("Sin hoja MAPA o sin movimientos mapeados: "
             "se muestran solo los gráficos de composición.")
@@ -734,7 +761,9 @@ if pesados_hp is not None:
     st.markdown("### 📊 % de pesados por movimiento — hora pico")
     fig_pesados = grf.fig_pesados(pesados_hp, paleta)
     if fig_pesados is not None:
-        st.plotly_chart(fig_pesados, use_container_width=True)
+        _, col_cen, _ = st.columns([1, 2, 1])
+        with col_cen:
+            st.plotly_chart(fig_pesados, use_container_width=True)
         figuras.append(("% de pesados por movimiento — hora pico",
                         fig_pesados))
     else:
@@ -747,7 +776,13 @@ if pesados_hp is not None:
 st.divider()
 st.subheader("🗺️ Croquis de la intersección")
 
-# ── Referencia visual: qué representa cada M en cada tipo ──
+# ── Inferencias desde el MAPA ──
+nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
+mapeo_default = _inferir_mapeo_default(mapa, movs)
+
+# ── Referencia visual + nombres de ramas/extremos (editables) ──
+nombres_ramas = {}
+nombres_extremos = {}
 with st.expander("📖 ¿Qué movimiento es cada M?"):
     st.caption("Esquemas de referencia (sin valores). El mapeo concreto "
                "se configura más abajo.")
@@ -763,39 +798,32 @@ with st.expander("📖 ¿Qué movimiento es cada M?"):
             unsafe_allow_html=True,
         )
 
-# ── Inferencias desde el MAPA ──
-nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
-mapeo_default = _inferir_mapeo_default(mapa, movs)
-
-# ── Tipo de croquis: elegido ANTES de procesar (sección 4b) ──
-
-
-# ── Nombres de ramas / extremos (editables, según el tipo) ──
-nombres_ramas = {}
-nombres_extremos = {}
-if tipo_croquis == "Ruta":
-    st.markdown("**Nombres de los extremos** (editables)")
-    c1, c2 = st.columns(2)
-    with c1:
-        nombre_oeste = st.text_input("Extremo Oeste",
-                                     value=nombres_inferidos["O"],
-                                     key="nom_O")
-    with c2:
-        nombre_este = st.text_input("Extremo Este",
-                                    value=nombres_inferidos["E"],
-                                    key="nom_E")
-    nombres_extremos = {"O": nombre_oeste, "E": nombre_este}
-else:
-    ramas_ui = ["S", "E", "O"] if tipo_croquis == "T" else ["N", "S", "E", "O"]
-    st.markdown("**Nombres de las ramas** (editables)")
-    cols = st.columns(len(ramas_ui))
-    for col, rama in zip(cols, ramas_ui):
-        with col:
-            nombres_ramas[rama] = st.text_input(
-                f"Rama {nombres_inferidos[rama].title()}",
-                value=nombres_inferidos[rama],
-                key=f"nom_{rama}",
-            )
+    st.divider()
+    # ── Nombres de ramas / extremos (editables, según el tipo) ──
+    if tipo_croquis == "Ruta":
+        st.markdown("**Nombres de los extremos** (editables)")
+        c1, c2 = st.columns(2)
+        with c1:
+            nombre_oeste = st.text_input("Extremo Oeste",
+                                         value=nombres_inferidos["O"],
+                                         key="nom_O")
+        with c2:
+            nombre_este = st.text_input("Extremo Este",
+                                        value=nombres_inferidos["E"],
+                                        key="nom_E")
+        nombres_extremos = {"O": nombre_oeste, "E": nombre_este}
+    else:
+        ramas_ui = (["S", "E", "O"] if tipo_croquis == "T"
+                    else ["N", "S", "E", "O"])
+        st.markdown("**Nombres de las ramas** (editables)")
+        cols = st.columns(len(ramas_ui))
+        for col, rama in zip(cols, ramas_ui):
+            with col:
+                nombres_ramas[rama] = st.text_input(
+                    f"Rama {nombres_inferidos[rama].title()}",
+                    value=nombres_inferidos[rama],
+                    key=f"nom_{rama}",
+                )
 
 # ── Mapeo movimiento → posición del croquis ──
 st.markdown("**Mapeo de movimientos** (a qué flecha del croquis va cada uno)")

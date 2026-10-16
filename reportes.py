@@ -71,26 +71,58 @@ def _fmt(valor):
     return str(valor)
 
 
+def _titulo_plano(texto):
+    """
+    Aplana un título de Plotly a UNA sola línea, para que mirage no
+    superponga el título con el subtítulo (`<br><sub>…</sub>`).
+
+    'TÍTULO<br><sub>SUBTÍTULO</sub>' → 'TÍTULO — SUBTÍTULO'
+    """
+    if not texto:
+        return texto
+    plano = re.sub(r"<br\s*/?>\s*<sub>", " — ", str(texto), flags=re.I)
+    plano = re.sub(r"<br\s*/?>", " — ", plano, flags=re.I)
+    plano = re.sub(r"<[^>]+>", "", plano)
+    return plano.strip()
+
+
 def fig_a_png(fig, ancho=None, escala=2, timeout=10):
     """
     Convierte una figura Plotly a PNG con mirage.
     Devuelve bytes o None si mirage no está disponible o falla.
+
+    - Pasa SIEMPRE `width` y `height` para que mirage no use sus valores
+      por defecto (que deforman el aspect ratio de la figura).
+    - Si se indica `ancho`, el alto se recalcula manteniendo la
+      proporción original de `fig.layout`.
+    - El título se aplana sobre una COPIA (el `fig` original no se toca,
+      así en pantalla sigue con 2 líneas).
     """
     try:
-        kwargs = {"format": "png", "scale": escala}
-        if ancho:
-            kwargs["width"] = ancho
-        
         # Mirage requiere que la figura sea serializable (sin ndarray de NumPy)
         import json
         import plotly.graph_objects as go
         import plotly.io as pio
         import mirage
-        
+
         # Convertir figura a JSON puro para evitar problemas con ndarray
         fig_json = pio.to_json(fig)
         fig_serializable = go.Figure(json.loads(fig_json))
-        
+
+        # Título a UNA línea sobre la copia (el original no se modifica)
+        fig_serializable.update_layout(
+            title_text=_titulo_plano(fig_serializable.layout.title.text),
+            title_font=dict(size=12))
+
+        # Dimensiones: derivadas de la figura, con proporción resuelta
+        w0 = fig_serializable.layout.width or 700
+        h0 = fig_serializable.layout.height or 450
+        ancho_final = int(ancho) if ancho else int(w0)
+        alto_final = max(1, round(ancho_final * h0 / w0))
+
+        kwargs = {"format": "png", "scale": escala,
+                  "width": ancho_final, "height": alto_final}
+
         # Usar mirage para convertir a PNG
         png_bytes = mirage.to_image(fig_serializable, **kwargs)
         return png_bytes
@@ -456,14 +488,37 @@ def _tabla_pdf_multinivel(columnas, filas, enc_nivel2, col_widths,
     return tabla
 
 
+def _grupo_grafico(titulo):
+    """
+    Categoría del gráfico por su título, para emparejar SOLO gráficos del
+    mismo tipo (p.ej. las 2 tortas juntas, las barras por hora juntas) y no
+    mezclar una torta con una barra.
+    """
+    t = str(titulo).lower()
+    if "composición" in t:
+        return "tortas"
+    if "distribución" in t:
+        return "linea"
+    if "por hora" in t:
+        return "hora"
+    if "15 min" in t:
+        return "quince"
+    if "pesados" in t:
+        return "pesados"
+    return "otros"
+
+
 def _historia_imagenes(con_imagenes, ancho_util, negrita):
     """
     Flowables de gráficos para el PDF:
 
-    - De a 2 imágenes por fila, con el título ARRIBA de cada una (mismo
-      estilo que los títulos de sección); fluyen las que quepan en página.
+    - De a 2 imágenes por fila (del MISMO grupo), con el título ARRIBA de
+      cada una (mismo estilo que los títulos de sección); fluyen las que
+      quepan en página.
     - Las imágenes 'solas' (croquis, o más altas que anchas ×1.15) van a
       ancho completo con página propia (KeepTogether + PageBreak).
+    - Un grupo con cantidad impar deja su última imagen a ancho completo,
+      sin mezclarla con el grupo siguiente.
     """
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.lib.units import cm
@@ -473,43 +528,23 @@ def _historia_imagenes(con_imagenes, ancho_util, negrita):
     estilo_titulo = ParagraphStyle("TituloGrafico", fontName=negrita,
                                    fontSize=10, leading=12)
 
-    # Clasificar: sola o emparejable
+    # Clasificar: sola (ancho completo) o emparejable + grupo.
     items = []
     for titulo, png in con_imagenes:
         w, h = _png_dims(png)
         solo = ("croquis" in titulo.lower()) or (h / max(w, 1) > 1.15)
-        items.append((titulo, png, w, h, solo))
+        items.append((titulo, png, w, h, solo, _grupo_grafico(titulo)))
 
     flujables = []
-    k = 0
-    while k < len(items):
-        titulo, png, w, h, solo = items[k]
 
-        if solo:
-            esc = min(ancho_util / w, 23 * cm / h)
-            flujables.append(KeepTogether([
-                Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
-                Image(io.BytesIO(png), width=w * esc, height=h * esc),
-            ]))
-            k += 1
-            if k < len(items):
-                flujables.append(PageBreak())
-            continue
-
-        pareja = (items[k + 1] if k + 1 < len(items) and not items[k + 1][4]
-                  else None)
-        ancho_col = (ancho_util - 0.3 * cm) / 2 if pareja else ancho_util
-
-        pendientes = [(titulo, png, w, h)]
-        if pareja:
-            pendientes.append(pareja[:4])
-
+    def _fila(fila_items, ancho_col):
+        """Tabla de 1 o 2 imágenes con sus títulos arriba."""
         titulos, imgs = [], []
-        for t, p, iw, ih in pendientes:
+        for t, p, iw, ih, *_ in fila_items:
             esc = ancho_col / iw
             titulos.append(Paragraph(escape(_sin_emoji(t)), estilo_titulo))
-            imgs.append(Image(io.BytesIO(p), width=ancho_col, height=ih * esc))
-
+            imgs.append(Image(io.BytesIO(p), width=ancho_col,
+                              height=ih * esc))
         tabla = Table([titulos, imgs], colWidths=[ancho_col] * len(imgs))
         tabla.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
@@ -518,9 +553,44 @@ def _historia_imagenes(con_imagenes, ancho_util, negrita):
             ("TOPPADDING", (0, 0), (-1, -1), 2),
             ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
         ]))
-        flujables.append(KeepTogether([tabla]))
-        flujables.append(Spacer(1, 6))
-        k += 2 if pareja else 1
+        return KeepTogether([tabla])
+
+    def _volcar(pendientes):
+        """Empareja los pendientes de a 2 (ya son del mismo grupo)."""
+        k = 0
+        while k < len(pendientes):
+            if k + 1 < len(pendientes):
+                ancho_col = (ancho_util - 0.3 * cm) / 2
+                flujables.append(_fila(pendientes[k:k + 2], ancho_col))
+                k += 2
+            else:
+                flujables.append(_fila(pendientes[k:k + 1], ancho_util))
+                k += 1
+            flujables.append(Spacer(1, 6))
+
+    pendientes, grupo_actual = [], None
+    for it in items:
+        titulo, png, w, h, solo, grupo = it
+        if solo:
+            _volcar(pendientes)
+            pendientes, grupo_actual = [], None
+            esc = min(ancho_util / w, 23 * cm / h)
+            flujables.append(KeepTogether([
+                Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
+                Image(io.BytesIO(png), width=w * esc, height=h * esc),
+            ]))
+            flujables.append(PageBreak())
+            continue
+        if pendientes and grupo != grupo_actual:
+            _volcar(pendientes)
+            pendientes = []
+        grupo_actual = grupo
+        pendientes.append(it)
+    _volcar(pendientes)
+
+    # Sin PageBreak final (evita una página en blanco).
+    while flujables and isinstance(flujables[-1], PageBreak):
+        flujables.pop()
 
     return flujables
 
