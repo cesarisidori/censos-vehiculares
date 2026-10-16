@@ -826,29 +826,29 @@ with st.expander("📖 ¿Qué movimiento es cada M?"):
                 )
 
 # ── Mapeo movimiento → posición del croquis ──
-st.markdown("**Mapeo de movimientos** (a qué flecha del croquis va cada uno)")
+with st.expander("🎯 Mapeo de movimientos (a qué flecha del croquis va cada uno)"):
+    if tipo_croquis == "Cruz":
+        opciones_mapeo = list(croquis_svg.ORDEN_CANONICO)
+    elif tipo_croquis == "T":
+        opciones_mapeo = [p for p in croquis_svg.ORDEN_CANONICO
+                          if p not in croquis_svg.SLOTS_INVALIDOS_T
+                          and not p.startswith("N_")]
+    else:
+        opciones_mapeo = list(croquis_svg.POSICIONES_RUTA)
 
-if tipo_croquis == "Cruz":
-    opciones_mapeo = list(croquis_svg.ORDEN_CANONICO)
-elif tipo_croquis == "T":
-    opciones_mapeo = [p for p in croquis_svg.ORDEN_CANONICO
-                      if p not in croquis_svg.SLOTS_INVALIDOS_T
-                      and not p.startswith("N_")]
-else:
-    opciones_mapeo = list(croquis_svg.POSICIONES_RUTA)
+    OPCIONES_MAPEO = ["— (no mostrar)"] + opciones_mapeo
 
-OPCIONES_MAPEO = ["— (no mostrar)"] + opciones_mapeo
-
-mapeo_final = {}
-cols_mapeo = st.columns(4)
-for i, mov in enumerate(movs):
-    with cols_mapeo[i % 4]:
-        default = mapeo_default.get(mov, "— (no mostrar)")
-        idx = OPCIONES_MAPEO.index(default) if default in OPCIONES_MAPEO else 0
-        seleccion = st.selectbox(f"{mov}", OPCIONES_MAPEO, index=idx,
-                                 key=f"map_{mov}")
-        if seleccion != "— (no mostrar)":
-            mapeo_final[mov] = seleccion
+    mapeo_final = {}
+    cols_mapeo = st.columns(4)
+    for i, mov in enumerate(movs):
+        with cols_mapeo[i % 4]:
+            default = mapeo_default.get(mov, "— (no mostrar)")
+            idx = (OPCIONES_MAPEO.index(default)
+                   if default in OPCIONES_MAPEO else 0)
+            seleccion = st.selectbox(f"{mov}", OPCIONES_MAPEO, index=idx,
+                                     key=f"map_{mov}")
+            if seleccion != "— (no mostrar)":
+                mapeo_final[mov] = seleccion
 
 # ── Volúmenes ──
 # Hora pico: desde resumen_plano (ya excluye tipos configurados)

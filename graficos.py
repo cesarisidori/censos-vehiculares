@@ -232,7 +232,7 @@ def fig_pesados(pesados_hp, paleta=None, width=500):
     )
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10),
-        height=max(120, len(pct) * 10),
+        height=max(200, len(pct) * 25),
         width=width,
         showlegend=False,
         coloraxis_showscale=False,
