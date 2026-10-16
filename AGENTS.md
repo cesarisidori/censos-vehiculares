@@ -7,7 +7,7 @@ FHP, % de pesados, y genera gráficos, reportes (PDF/DOCX) y croquis
 de intersección (cruz, T o ruta) basados en SVG.
 
 **Stack:** Python 3.10+, Streamlit, pandas, openpyxl, plotly, reportlab,
-python-docx, kaleido.
+python-docx, plotly-mirage.
 
 **Entorno:** Windows (principal) y Linux Mint. En Windows usá `python`;
 en Linux, `python3`.
@@ -32,8 +32,7 @@ en Linux, `python3`.
   Define `PALETA_DEFAULT`; la app la personaliza con color pickers.
   Incluye `_safe_int()` para blindar contra NaN/None.
 - `reportes.py` — Reportes descargables: PDF (reportlab, DejaVu **embebida**
-  desde `fonts/`) y DOCX (python-docx, **Arial**). Convierte figuras a PNG
-  con kaleido.
+  desde `fonts/`) y DOCX (python-docx, **Arial**). 
 - `croquis_svg.py` — Renderiza los croquis (cruz, T, ruta) inyectando los
   valores de cada movimiento en los SVG base. Limpia el SVG antes de
   inyectarlo (elimina metadata de Inkscape, reemplaza `context-stroke`).
@@ -72,7 +71,7 @@ Mapeo fijo del SVG:
   NUNCA hardcodear listas de tipos, calles o movimientos.
 - Tipografía de reportes fija: PDF → DejaVu **embebida** (`fonts/`);
   DOCX → **Arial**. NO cambiarla.
-- En `requirements.txt`, `plotly`/`kaleido`/`reportlab`/`python-docx` van
+- En `requirements.txt`, `plotly`/`reportlab`/`python-docx` van
   **con versión fija** (la exportación de imágenes depende de esa combinación).
 
 ## Lógica de negocio (crítica)

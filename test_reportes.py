@@ -83,7 +83,7 @@ if fig:
 #     figuras.append(("Croquis", fig))
 
 # ── 4) Convertir figuras a PNG ──
-print("Convirtiendo figuras a PNG (kaleido)...")
+print("Convirtiendo figuras a PNG (mirage)...")
 imgs = []
 for nombre, figura in figuras:
     png = rep.fig_a_png(figura)

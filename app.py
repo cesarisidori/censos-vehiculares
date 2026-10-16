@@ -25,34 +25,32 @@ import croquis_svg
 # ─────────────────────────────────────────────────────────────
 # Kaleido health check (evita cuelgues en Windows)
 # ─────────────────────────────────────────────────────────────
-def _kaleido_funciona(timeout=5):
-    """Verifica si kaleido puede convertir una figura Plotly a PNG.
+def _mirage_funciona():
+    """Verifica si mirage puede convertir una figura Plotly a PNG.
 
-    Ejecuta un subprocess con timeout para evitar que kaleido se cuelgue
-    indefinidamente en Windows. Devuelve True si funciona, False si no.
+    Devuelve True si funciona, False si no.
     """
     try:
+        import plotly.graph_objects as go
+        import mirage
+        
+        # Crear figura simple de prueba
+        fig = go.Figure(data=[go.Bar(y=[1, 3, 2])])
+        
+        # Convertir figura a JSON puro para evitar problemas con ndarray
         import json
-        script = (
-            "import json, sys\n"
-            "import plotly.io as pio\n"
-            "fig = pio.from_json(json.loads(sys.stdin.read()))\n"
-            "img = fig.to_image(format='png', scale=1)\n"
-            "sys.stdout.buffer.write(img)\n"
-        )
-        fig_json = json.dumps({"data": [], "layout": {}})
-        resultado = subprocess.run(
-            [sys.executable, "-c", script],
-            input=fig_json,
-            capture_output=True,
-            timeout=timeout,
-        )
-        return resultado.returncode == 0 and len(resultado.stdout) > 0
-    except (subprocess.TimeoutExpired, Exception):
+        import plotly.io as pio
+        fig_json = pio.to_json(fig)
+        fig_serializable = go.Figure(json.loads(fig_json))
+        
+        # Intentar convertir a PNG
+        png_bytes = mirage.to_image(fig_serializable, format='png', scale=1)
+        return len(png_bytes) > 0
+    except Exception:
         return False
 
 
-KALEIDO_OK = _kaleido_funciona()
+MIRAGE_OK = _mirage_funciona()
 
 # ─────────────────────────────────────────────────────────────
 # Configuración de página
@@ -134,10 +132,10 @@ def _leer_movimientos_mapa(contenido: bytes):
 
 
 def _imagenes_reporte(figuras):
-    """PNG de cada figura con kaleido. Los croquis conservan su proporción."""
-    if not KALEIDO_OK:
+    """PNG de cada figura con mirage. Los croquis conservan su proporción."""
+    if not MIRAGE_OK:
         st.warning(
-            "Kaleido no funciona en este sistema. Los reportes se generarán "
+            "Mirage no funciona en este sistema. Los reportes se generarán "
             "sin gráficos."
         )
         return [(titulo, None) for titulo, fig in figuras]

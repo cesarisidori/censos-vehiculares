@@ -24,7 +24,7 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
 pip install -r requirements.txt
 ```
 
-> `plotly`, `kaleido`, `reportlab` y `python-docx` van **con versión fija**:
+> `plotly`, `plotly-mirage`, `reportlab` y `python-docx` van **con versión fija**:
 > son los que garantizan que la exportación de imágenes y los reportes
 > funcionen igual en cualquier máquina (Windows/Linux).
 
