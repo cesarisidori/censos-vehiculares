@@ -109,6 +109,17 @@ def leer_svg_esquema(ruta_svg: str) -> str:
     return _cargar_svg(ruta_svg)
 
 
+def extraer_svg(html: str) -> str:
+    """
+    Devuelve solo el bloque <svg>…</svg> del HTML que arman las
+    funciones renderizar_svg_* (que envuelven el SVG para
+    components.html). Necesario para rasterizar el croquis a PNG
+    (resvg no entiende el wrapper <html><body>).
+    """
+    m = re.search(r"<svg\b.*?</svg>", html, flags=re.DOTALL)
+    return m.group(0) if m else html
+
+
 def calcular_entradas_salidas(volumenes, mapeo):
     """
     Calcula entradas y salidas por rama a partir de los volúmenes

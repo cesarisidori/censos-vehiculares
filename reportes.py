@@ -6,8 +6,9 @@ Generación de reportes descargables del censo:
 - PDF  (reportlab)   → `generar_pdf(ctx)`
 - DOCX (python-docx) → `generar_docx(ctx)` — se abre en Word y en LibreOffice
 
-Las figuras Plotly se convierten a PNG con kaleido (`fig_a_png`) y se
-embeben como imágenes (croquis incluido).
+Las figuras Plotly se convierten a PNG con mirage (`fig_a_png`). Los
+croquis (SVG) se rasterizan a PNG con svg2png-py/resvg (`svg_a_png`).
+Ambos se embeben como imágenes en el PDF y el DOCX.
 
 `ctx` es un dict con:
     titulo, subtitulo                 str
@@ -18,6 +19,7 @@ embeben como imágenes (croquis incluido).
     pesados_hp, totales
     excluidos                         list[str]
     imagenes                          list[(titulo_seccion, png_bytes | None)]
+    croquis                           list[(titulo_seccion, svg_str)]
 
 Tipografía:
 - PDF  → DejaVu Sans TTF **embebida** (fonts/ del proyecto → sistema →
@@ -100,6 +102,88 @@ def _png_dims(png):
     """(ancho_px, alto_px) de un PNG en bytes."""
     with PILImage.open(io.BytesIO(png)) as im:
         return im.size
+
+
+# ─────────────────────────────────────────────────────────────
+# Croquis: SVG → PNG (resvg vía svg2png-py)
+# ─────────────────────────────────────────────────────────────
+_FONT_DB_SVG = None
+
+
+def _font_db_svg():
+    """
+    FontDatabase cacheado para rasterizar SVG: fuentes del sistema + las
+    de `fonts/` del proyecto (para que el texto del croquis tenga glifos
+    aunque el sistema no traiga Arial). Import perezoso: solo se necesita
+    al convertir un croquis.
+    """
+    global _FONT_DB_SVG
+    if _FONT_DB_SVG is None:
+        import svg2png_py
+
+        db = svg2png_py.FontDatabase.system()
+        dir_fuentes = Path(__file__).parent / "fonts"
+        if dir_fuentes.is_dir():
+            try:
+                db.load_fonts_dir(str(dir_fuentes))
+            except Exception:
+                pass
+        _FONT_DB_SVG = db
+    return _FONT_DB_SVG
+
+
+def _svg_con_tamano(svg, ancho):
+    """
+    Fuerza width/height en píxeles en la raíz <svg>. resvg ignora
+    width='100%' y renderiza al tamaño del viewBox (unidades), que para
+    el croquis es diminuto. Se calcula el alto desde el viewBox para no
+    deformar la proporción.
+    """
+    m = re.search(r'viewBox="[^"]*?\s([\d.]+)\s([\d.]+)"', svg)
+    if not m:
+        return svg
+    vb_ancho, vb_alto = float(m.group(1)), float(m.group(2))
+    if vb_ancho <= 0:
+        return svg
+    alto = max(1, round(ancho * vb_alto / vb_ancho))
+
+    def _fix(m):
+        tag = m.group(0)
+        tag = re.sub(r'width="[^"]*"', f'width="{ancho}"', tag, count=1)
+        tag = re.sub(r'height="[^"]*"', f'height="{alto}"', tag, count=1)
+        return tag
+
+    return re.sub(r'<svg\b[^>]*>', _fix, svg, count=1)
+
+
+def svg_a_png(svg, ancho=1600):
+    """
+    Convierte un SVG (str) a PNG (bytes) con svg2png-py (resvg), fijando
+    `ancho` px para que no salga pixelado al escalarlo en el reporte.
+    Devuelve bytes o None si svg2png-py no está disponible o falla.
+    """
+    if not svg:
+        return None
+    try:
+        import svg2png_py
+
+        return svg2png_py.svg_to_png(_svg_con_tamano(svg, ancho),
+                                     _font_db_svg())
+    except Exception:
+        return None
+
+
+def _croquis_a_imagenes(ctx):
+    """
+    ctx['croquis'] = [(título, svg_str)]  →  [(título, png_bytes)].
+    Los croquis que no se puedan rasterizar se omiten.
+    """
+    imagenes = []
+    for titulo, svg in ctx.get("croquis") or []:
+        png = svg_a_png(svg)
+        if png:
+            imagenes.append((titulo, png))
+    return imagenes
 
 
 def _aplanar_columnas(columnas):
@@ -577,6 +661,16 @@ def generar_pdf(ctx):
         story.append(Paragraph("Gráficos", h2))
         story += _historia_imagenes(con_imagenes, ancho_util, negrita)
 
+    # ── Croquis — vertical, a ancho completo (una imagen por página) ──
+    croquis_pngs = _croquis_a_imagenes(ctx)
+    if croquis_pngs:
+        if plantilla != "vertical":
+            story.append(NextPageTemplate("vertical"))
+            plantilla = "vertical"
+            story.append(PageBreak())
+        story.append(Paragraph("Croquis", h2))
+        story += _historia_imagenes(croquis_pngs, ancho_util, negrita)
+
     doc.build(story)
     return buf.getvalue()
 
@@ -807,18 +901,29 @@ def generar_docx(ctx):
         escala = min(ancho_max_cm / w_px, alto_max_cm / h_px)
         doc.add_picture(io.BytesIO(png), width=Cm(w_px * escala))
 
+    # ── Croquis ──
+    croquis_pngs = _croquis_a_imagenes(ctx)
+    if croquis_pngs:
+        doc.add_heading("Croquis", level=1)
+    for titulo, png in croquis_pngs:
+        doc.add_heading(str(titulo), level=2)
+        w_px, h_px = _png_dims(png)
+        escala = min(ancho_max_cm / w_px, alto_max_cm / h_px)
+        doc.add_picture(io.BytesIO(png), width=Cm(w_px * escala))
+
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()
 
 
-def gen_pdf(imgs, output_path, title, subtitle, date):
+def gen_pdf(imgs, output_path, title, subtitle, date, croquis=None):
     """Wrapper function for test compatibility. Genera PDF y guarda en archivo."""
     ctx = {
         "titulo": title,
         "subtitulo": subtitle,
         "fecha": date,
         "imagenes": imgs,
+        "croquis": croquis or [],
         "fhp_data": {
             "fhp": 0.813,
             "hora_pico_inicio": "07:30",
@@ -844,13 +949,14 @@ def gen_pdf(imgs, output_path, title, subtitle, date):
     return output_path
 
 
-def gen_docx(imgs, output_path, title, subtitle, date):
+def gen_docx(imgs, output_path, title, subtitle, date, croquis=None):
     """Wrapper function for test compatibility. Genera DOCX y guarda en archivo."""
     ctx = {
         "titulo": title,
         "subtitulo": subtitle,
         "fecha": date,
         "imagenes": imgs,
+        "croquis": croquis or [],
         "fhp_data": {
             "fhp": 0.813,
             "hora_pico_inicio": "07:30",

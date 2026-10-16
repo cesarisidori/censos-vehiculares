@@ -836,6 +836,7 @@ volumenes_total = {mov: int(df_validos[mov].sum())
                    for mov in movs if mov in mapeo_final}
 
 # ── Render de los dos croquis ──
+croquis_reporte = []  # [(título, svg)] para incluir en el reporte PDF/DOCX
 if mapa is not None and len(mapeo_final) > 0:
     ancho_contenedor = "900px" if tipo_croquis == "Ruta" else "750px"
 
@@ -849,6 +850,10 @@ if mapa is not None and len(mapeo_final) > 0:
         height=altura_hp,
         scrolling=False,
     )
+    croquis_reporte.append(
+        (f"Croquis {tipo_croquis} — hora pico",
+         croquis_svg.extraer_svg(svg_hp_html))
+    )
 
     # ── Croquis total ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
@@ -859,6 +864,10 @@ if mapa is not None and len(mapeo_final) > 0:
         f'{svg_total_html}</div>',
         height=altura_total,
         scrolling=False,
+    )
+    croquis_reporte.append(
+        (f"Croquis {tipo_croquis} — total del censo",
+         croquis_svg.extraer_svg(svg_total_html))
     )
 
 # ─────────────────────────────────────────────────────────────
@@ -895,6 +904,7 @@ ctx_reporte = {
     "totales": totales,
     "excluidos": excluidos_final,
     "imagenes": imagenes,
+    "croquis": croquis_reporte,
 }
 
 col_pdf, col_docx = st.columns(2)

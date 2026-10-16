@@ -14,6 +14,7 @@ from pathlib import Path
 import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
+import croquis_svg as crq
 
 RUTA = Path(__file__).with_name("censo_ejemplo_cruz.xlsx")
 
@@ -71,16 +72,33 @@ fig = grf.fig_torta(serie_hp, "Composición por tipo — hora pico", SUBTITULO)
 if fig:
     figuras.append(("Composición por tipo — hora pico", fig))
 
-# ── 3) Croquis — DESHABILITADO: el croquis no se incluye en los reportes
-# mapeo_croquis = {m: p for m, p in MAPEO_EJEMPLO.items()
-#                  if m in res["movs"]}
-# if mapeo_croquis:
-#     volumenes = {m: int(df_validos[m].sum()) for m in mapeo_croquis}
-#     fig = crq.dibujar_croquis_cruz(
-#         mapeo=mapeo_croquis,
-#         nombres_ramas={"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"},
-#         titulo="Croquis — hora pico")
-#     figuras.append(("Croquis", fig))
+# ── 3) Croquis — se incluye en los reportes como SVG → PNG ──
+MAPEO_CRUZ = {
+    "M9": "N_IZQ", "M8": "N_FTE", "M7": "N_DER",
+    "M10": "S_IZQ", "M11": "S_FTE", "M12": "S_DER",
+    "M4": "E_IZQ", "M5": "E_FTE", "M6": "E_DER",
+    "M1": "O_IZQ", "M2": "O_FTE", "M3": "O_DER",
+}
+mapeo_croquis = {m: p for m, p in MAPEO_CRUZ.items() if m in res["movs"]}
+nombres_ramas = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
+
+croquis = []
+if mapeo_croquis:
+    hp_ini, hp_fin = res["pico"][0], res["pico"][1]
+    df_hp = df_validos[(df_validos["hora_inicio"] >= hp_ini)
+                       & (df_validos["hora_fin"] <= hp_fin)]
+    vol_hp = {m: int(df_hp[m].sum()) for m in mapeo_croquis}
+    vol_total = {m: int(df_validos[m].sum()) for m in mapeo_croquis}
+
+    svg_hp_html, _ = crq.renderizar_svg_cruz(vol_hp, mapeo_croquis,
+                                             nombres_ramas)
+    svg_total_html, _ = crq.renderizar_svg_cruz(vol_total, mapeo_croquis,
+                                                nombres_ramas)
+    croquis = [
+        ("Croquis Cruz — hora pico", crq.extraer_svg(svg_hp_html)),
+        ("Croquis Cruz — total del censo", crq.extraer_svg(svg_total_html)),
+    ]
+    print(f"Croquis: {len(croquis)} listos para el reporte")
 
 # ── 4) Convertir figuras a PNG ──
 print("Convirtiendo figuras a PNG (mirage)...")
@@ -101,6 +119,7 @@ pdf_path = rep.gen_pdf(
     title=TITULO,
     subtitle=SUBTITULO,
     date=date.today(),
+    croquis=croquis,
 )
 print(f"PDF: {pdf_path}")
 
@@ -112,6 +131,7 @@ docx_path = rep.gen_docx(
     title=TITULO,
     subtitle=SUBTITULO,
     date=date.today(),
+    croquis=croquis,
 )
 print(f"DOCX: {docx_path}")
 

@@ -2,8 +2,16 @@ streamlit
 pandas
 openpyxl
 # El resto va con versión fija: son los que determinan que la exportación
-# de imágenes (kaleido) y los reportes funcionen igual en cualquier máquina.
+# de imágenes y los reportes funcionen igual en cualquier máquina.
 plotly==5.15.0      # Compatible con mirage
-plotly-mirage       # Reemplazo de kaleido para Windows (sin Chromium)
+plotly-mirage       # Gráficos Plotly → PNG sin Chromium (reemplazo de kaleido)
+svg2png-py==1.1.0   # Croquis SVG → PNG en los reportes (resvg, sin deps nativas)
 reportlab==5.0.1    # PDF
 python-docx==1.2.0  # DOCX
+
+# NOTA: usar Python 3.12 (ver .python-version). plotly-mirage depende de
+# `quickjs`, que sólo publica wheels hasta Python 3.12. En 3.13/3.14
+# `pip install -r requirements.txt` falla; en ese caso instalá así:
+#   pip install quickjs-ng resvg-py
+#   pip install --no-deps plotly-mirage
+# (quickjs-ng provee el mismo módulo `quickjs` que usa mirage).
