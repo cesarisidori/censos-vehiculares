@@ -49,7 +49,11 @@ def _safe_int(valor):
     except (TypeError, ValueError):
         return 0
 
-def _layout_barras(titulo, subtitulo, eje_y, height=420):
+
+# ─────────────────────────────────────────────────────────────
+# Helpers de layout
+# ─────────────────────────────────────────────────────────────
+def _layout_barras(titulo, subtitulo, eje_y, height=210, width=500):
     return dict(
         title=dict(text=_titulo(titulo, subtitulo), x=0.5, xanchor="center",
                    font=dict(size=16)),
@@ -60,6 +64,7 @@ def _layout_barras(titulo, subtitulo, eje_y, height=420):
                     xanchor="right", x=1.0),
         margin=dict(l=60, r=20, t=80, b=50),
         height=height,
+        width=width,
         plot_bgcolor="white",
         yaxis=dict(gridcolor="#e0e0e0"),
     )
@@ -106,7 +111,7 @@ def agregar_por_hora(df_cs):
 # Figuras
 # ─────────────────────────────────────────────────────────────
 def fig_barras_agrupadas(df, col_periodo, periodos, titulo, subtitulo,
-                         eje_y, paleta=None):
+                         eje_y, paleta=None, height=550, width=500):
     """
     Barras agrupadas por sentido + serie 'Ambos' (suma de sentidos).
 
@@ -138,11 +143,12 @@ def fig_barras_agrupadas(df, col_periodo, periodos, titulo, subtitulo,
         marker_color=_color(paleta, len(piv.columns)),
     ))
 
-    fig.update_layout(**_layout_barras(titulo, subtitulo, eje_y))
+    fig.update_layout(**_layout_barras(titulo, subtitulo, eje_y, height=height,
+                                       width=width))
     return fig
 
 
-def fig_lineas(df_cs, titulo, subtitulo, paleta=None):
+def fig_lineas(df_cs, titulo, subtitulo, paleta=None, width=1000, height=600):
     """Líneas + marcadores: una por sentido (todas las calles), censo completo."""
     paleta = paleta or PALETA_DEFAULT
     bloques = sorted(df_cs["hora_inicio"].unique())
@@ -169,7 +175,8 @@ def fig_lineas(df_cs, titulo, subtitulo, paleta=None):
         legend=dict(orientation="h", yanchor="bottom", y=-0.25,
                     xanchor="center", x=0.5),
         margin=dict(l=60, r=20, t=80, b=80),
-        height=460,
+        width=width,
+        height=height,
         plot_bgcolor="white",
         xaxis=dict(gridcolor="#f0f0f0", tickangle=-45),
         yaxis=dict(gridcolor="#e0e0e0"),
@@ -201,7 +208,7 @@ def fig_torta(series, titulo, subtitulo="", paleta=None):
     return fig
 
 
-def fig_pesados(pesados_hp, paleta=None):
+def fig_pesados(pesados_hp, paleta=None, width=500):
     """Barras horizontales del % de pesados por movimiento (hora pico)."""
     paleta = paleta or PALETA_DEFAULT
     pct = pesados_hp.loc["% pesados"]
@@ -220,9 +227,9 @@ def fig_pesados(pesados_hp, paleta=None):
     )
     fig.update_layout(
         margin=dict(l=10, r=10, t=10, b=10),
-        height=max(300, len(pct) * 25),
+        height=max(75, len(pct) * 6),
+        width=width,
         showlegend=False,
         coloraxis_showscale=False,
     )
     return fig
-

@@ -7,6 +7,8 @@ Ejecutar:
 
 import hashlib
 import io
+import subprocess
+import sys
 from datetime import date, datetime
 from pathlib import Path
 
@@ -18,6 +20,39 @@ import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
 import croquis_svg
+
+
+# ─────────────────────────────────────────────────────────────
+# Kaleido health check (evita cuelgues en Windows)
+# ─────────────────────────────────────────────────────────────
+def _kaleido_funciona(timeout=5):
+    """Verifica si kaleido puede convertir una figura Plotly a PNG.
+
+    Ejecuta un subprocess con timeout para evitar que kaleido se cuelgue
+    indefinidamente en Windows. Devuelve True si funciona, False si no.
+    """
+    try:
+        import json
+        script = (
+            "import json, sys\n"
+            "import plotly.io as pio\n"
+            "fig = pio.from_json(json.loads(sys.stdin.read()))\n"
+            "img = fig.to_image(format='png', scale=1)\n"
+            "sys.stdout.buffer.write(img)\n"
+        )
+        fig_json = json.dumps({"data": [], "layout": {}})
+        resultado = subprocess.run(
+            [sys.executable, "-c", script],
+            input=fig_json,
+            capture_output=True,
+            timeout=timeout,
+        )
+        return resultado.returncode == 0 and len(resultado.stdout) > 0
+    except (subprocess.TimeoutExpired, Exception):
+        return False
+
+
+KALEIDO_OK = _kaleido_funciona()
 
 # ─────────────────────────────────────────────────────────────
 # Configuración de página
@@ -98,13 +133,24 @@ def _leer_movimientos_mapa(contenido: bytes):
     return df
 
 
-@st.cache_data(show_spinner="🖼️ Preparando gráficos del reporte…")
 def _imagenes_reporte(figuras):
     """PNG de cada figura con kaleido. Los croquis conservan su proporción."""
-    return [
-        (titulo, rep.fig_a_png(fig, ancho=None if "Croquis" in titulo else 1100))
-        for titulo, fig in figuras
-    ]
+    if not KALEIDO_OK:
+        st.warning(
+            "Kaleido no funciona en este sistema. Los reportes se generarán "
+            "sin gráficos."
+        )
+        return [(titulo, None) for titulo, fig in figuras]
+    resultados = []
+    for titulo, fig in figuras:
+        try:
+            ancho = None if "Croquis" in titulo else 1100
+            png = rep.fig_a_png(fig, ancho=ancho)
+            resultados.append((titulo, png))
+        except Exception as e:
+            st.error(f"Error convirtiendo {titulo}: {e}")
+            resultados.append((titulo, None))
+    return resultados
 
 
 @st.cache_data(show_spinner="📄 Generando PDF…")
@@ -619,6 +665,7 @@ if mapa is not None and not df_cs.empty:
             subtitulo=subtitulo_base,
             eje_y="VOLUMEN HORARIO",
             paleta=paleta,
+            height=550,
         )
         if fig is None:
             continue
@@ -628,8 +675,7 @@ if mapa is not None and not df_cs.empty:
     # ── Barras de 15 min en la hora pico, una por calle ──
     st.markdown("### 📊 Volumen por 15 min — hora pico")
     hp_ini, hp_fin = pico[0], pico[1]
-    bloques_hp = totales[(totales["hora_inicio"] >= hp_ini)
-                         & (totales["hora_fin"] <= hp_fin)]
+    bloques_hp = totales[(totales["hora_inicio"] >= hp_ini) & (totales["hora_fin"] <= hp_fin)]
     horas_hp = bloques_hp["hora_inicio"].tolist()
 
     if subtitulo_personalizado.strip():
@@ -647,6 +693,7 @@ if mapa is not None and not df_cs.empty:
             subtitulo=subtitulo_hp,
             eje_y="VOLUMEN CADA 15 MINUTOS",
             paleta=paleta,
+            height=550,
         )
         if fig is None:
             continue
@@ -834,9 +881,6 @@ st.download_button(
 
 # ── Reportes PDF / DOCX ──
 imagenes = _imagenes_reporte(figuras)
-if figuras and not any(png for _, png in imagenes):
-    st.warning("⚠️ No se pudieron renderizar las imágenes de los gráficos "
-               "(kaleido). Los reportes se generarán sin gráficos.")
 
 ctx_reporte = {
     "titulo": titulo_base,

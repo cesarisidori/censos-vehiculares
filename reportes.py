@@ -27,6 +27,8 @@ Tipografía:
 
 import io
 import re
+import subprocess
+import sys
 from pathlib import Path
 from xml.sax.saxutils import escape
 
@@ -67,16 +69,41 @@ def _fmt(valor):
     return str(valor)
 
 
-def fig_a_png(fig, ancho=None, escala=2):
+def fig_a_png(fig, ancho=None, escala=2, timeout=10):
     """
     Convierte una figura Plotly a PNG con kaleido.
-    Devuelve bytes o None si kaleido no está disponible.
+    Devuelve bytes o None si kaleido no está disponible o excede el timeout.
     """
     try:
         kwargs = {"format": "png", "scale": escala}
         if ancho:
             kwargs["width"] = ancho
-        return fig.to_image(**kwargs)
+        # Ejecutar kaleido en un subprocess con timeout para evitar cuelgues
+        # en Windows (kaleido puede bloquearse indefinidamente).
+        import json
+        import tempfile
+        import os
+
+        fig_json = json.dumps(fig.to_plotly_json())
+        script = (
+            "import json, sys, io\n"
+            "import plotly.io as pio\n"
+            "fig = pio.from_json(json.loads(sys.stdin.read()))\n"
+            "kwargs = " + json.dumps(kwargs) + "\n"
+            "img_bytes = fig.to_image(**kwargs)\n"
+            "sys.stdout.buffer.write(img_bytes)\n"
+        )
+        resultado = subprocess.run(
+            [sys.executable, "-c", script],
+            input=fig_json,
+            capture_output=True,
+            timeout=timeout,
+        )
+        if resultado.returncode != 0:
+            return None
+        return resultado.stdout
+    except subprocess.TimeoutExpired:
+        return None
     except Exception:
         return None
 
