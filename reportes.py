@@ -593,6 +593,29 @@ def _historia_imagenes(con_imagenes, ancho_util, negrita):
     return flujables
 
 
+def _croquis_flowables(con_imagenes, ancho_util, negrita, separacion=8):
+    """
+    Flowables de los croquis: a ancho completo, apilados, SIN saltos de
+    página forzados entre ellos (así entran los dos en una misma página al
+    final del reporte). Cada uno con su título arriba.
+    """
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import Image, KeepTogether, Paragraph, Spacer
+
+    estilo_titulo = ParagraphStyle("TituloCroquis", fontName=negrita,
+                                   fontSize=10, leading=12)
+    flujables = []
+    for titulo, png in con_imagenes:
+        w, h = _png_dims(png)
+        flujables.append(KeepTogether([
+            Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
+            Image(io.BytesIO(png), width=ancho_util,
+                  height=h * (ancho_util / w)),
+        ]))
+        flujables.append(Spacer(1, separacion))
+    return flujables
+
+
 def generar_pdf(ctx):
     """Genera el reporte PDF (orientación mixta) y devuelve bytes."""
     from reportlab.lib.enums import TA_CENTER
@@ -659,65 +682,60 @@ def generar_pdf(ctx):
     story.append(_tabla_pdf(fhp, col_widths=[5 * cm, 8 * cm],
                             fuente=9, familia=familia))
 
-    # ── Resumen agrupado — horizontal, encabezado multinivel ──
+    # ── Tablas (resumen agrupado + % pesados + totales) en UNA sola
+    #    página horizontal ──
     resumen_agr = ctx.get("resumen_agr")
-    if resumen_agr is not None:
-        if plantilla != "horizontal":
-            story.append(NextPageTemplate("horizontal"))
-            plantilla = "horizontal"
-            story.append(PageBreak())
-        story.append(Paragraph("Resumen hora pico (agrupado)", h2))
-        columnas = list(resumen_agr.columns)
-        filas = [[str(idx)] + [_fmt(v) for v in fila]
-                 for idx, fila in resumen_agr.iterrows()]
-        enc_nivel2 = ["Tipo"] + [
-            (str(c[1]).strip() if isinstance(c, tuple) and len(c) > 1 else "")
-            for c in columnas
-        ]
-        story.append(_tabla_pdf_multinivel(
-            columnas=columnas, filas=filas, enc_nivel2=enc_nivel2,
-            col_widths=_anchos_proporcionales(enc_nivel2, filas,
-                                              ancho_util_h,
-                                              familia=familia, fuente=7),
-            fuente=7, familia=familia,
-        ))
-
-    # ── % pesados (si aplica) — vertical ──
     pesados_hp = ctx.get("pesados_hp")
-    if pesados_hp is not None:
-        if plantilla != "vertical":
-            story.append(NextPageTemplate("vertical"))
-            plantilla = "vertical"
-            story.append(PageBreak())
-        story.append(Paragraph("% de vehículos pesados — hora pico", h2))
-        enc, filas = _df_a_tabla(pesados_hp, index_nombre="tipo_vehiculo")
-        story.append(_tabla_pdf(
-            [enc] + filas,
-            col_widths=_anchos_proporcionales(enc, filas, ancho_util,
-                                              familia=familia, fuente=6.5),
-            fuente=6.5, familia=familia, encabezado=True,
-            resaltar_total=True,
-        ))
-
-    # ── Totales 15 min — horizontal ──
     totales = ctx.get("totales")
-    if totales is not None:
+    if any(t is not None for t in (resumen_agr, pesados_hp, totales)):
         if plantilla != "horizontal":
             story.append(NextPageTemplate("horizontal"))
             plantilla = "horizontal"
             story.append(PageBreak())
-        story.append(Paragraph("Totales por bloque de 15 min", h2))
-        enc, filas = _df_a_tabla(totales, index_nombre="#")
-        fuente_tot = 7 if len(enc) <= 16 else 6
-        story.append(_tabla_pdf(
-            [enc] + filas,
-            col_widths=_anchos_proporcionales(enc, filas, ancho_util_h,
-                                              familia=familia,
-                                              fuente=fuente_tot),
-            fuente=fuente_tot,
-            familia=familia, encabezado=True,
-            resaltar_total=True,
-        ))
+
+        if resumen_agr is not None:
+            story.append(Paragraph("Resumen hora pico (agrupado)", h2))
+            columnas = list(resumen_agr.columns)
+            filas = [[str(idx)] + [_fmt(v) for v in fila]
+                     for idx, fila in resumen_agr.iterrows()]
+            enc_nivel2 = ["Tipo"] + [
+                (str(c[1]).strip() if isinstance(c, tuple) and len(c) > 1
+                 else "")
+                for c in columnas
+            ]
+            story.append(_tabla_pdf_multinivel(
+                columnas=columnas, filas=filas, enc_nivel2=enc_nivel2,
+                col_widths=_anchos_proporcionales(enc_nivel2, filas,
+                                                  ancho_util_h,
+                                                  familia=familia, fuente=7),
+                fuente=7, familia=familia,
+            ))
+
+        if pesados_hp is not None:
+            story.append(Paragraph("% de vehículos pesados — hora pico", h2))
+            enc, filas = _df_a_tabla(pesados_hp, index_nombre="tipo_vehiculo")
+            story.append(_tabla_pdf(
+                [enc] + filas,
+                col_widths=_anchos_proporcionales(enc, filas, ancho_util_h,
+                                                  familia=familia,
+                                                  fuente=6.5),
+                fuente=6.5, familia=familia, encabezado=True,
+                resaltar_total=True,
+            ))
+
+        if totales is not None:
+            story.append(Paragraph("Totales por bloque de 15 min", h2))
+            enc, filas = _df_a_tabla(totales, index_nombre="#")
+            fuente_tot = 7 if len(enc) <= 16 else 6
+            story.append(_tabla_pdf(
+                [enc] + filas,
+                col_widths=_anchos_proporcionales(enc, filas, ancho_util_h,
+                                                  familia=familia,
+                                                  fuente=fuente_tot),
+                fuente=fuente_tot,
+                familia=familia, encabezado=True,
+                resaltar_total=True,
+            ))
 
     # ── Gráficos — vertical, de a 2 por fila (títulos arriba) ──
     con_imagenes = [(t, png) for t, png in ctx.get("imagenes", []) if png]
@@ -729,7 +747,7 @@ def generar_pdf(ctx):
         story.append(Paragraph("Gráficos", h2))
         story += _historia_imagenes(con_imagenes, ancho_util, negrita)
 
-    # ── Croquis — vertical, a ancho completo (una imagen por página) ──
+    # ── Croquis — vertical, ambos en una misma página al final ──
     croquis_pngs = _croquis_a_imagenes(ctx)
     if croquis_pngs:
         if plantilla != "vertical":
@@ -737,7 +755,7 @@ def generar_pdf(ctx):
             plantilla = "vertical"
             story.append(PageBreak())
         story.append(Paragraph("Croquis", h2))
-        story += _historia_imagenes(croquis_pngs, ancho_util, negrita)
+        story += _croquis_flowables(croquis_pngs, ancho_util, negrita)
 
     doc.build(story)
     return buf.getvalue()
