@@ -952,8 +952,11 @@ volumenes_total = {mov: int(df_validos[mov].sum())
 
 # ── Render de los dos croquis ──
 croquis_reporte = []  # [(título, svg)] para incluir en el reporte PDF/DOCX
+od_reporte = []       # [(título, filas O-D)] para la tabla del PDF
 if mapa is not None and len(mapeo_final) > 0:
     ancho_contenedor = "900px" if tipo_croquis == "Ruta" else "750px"
+    etiquetas_od = (nombres_extremos if tipo_croquis == "Ruta"
+                    else nombres_ramas)
 
     # ── Croquis hora pico ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
@@ -967,6 +970,11 @@ if mapa is not None and len(mapeo_final) > 0:
     )
     svg_hp = croquis_svg.extraer_svg(svg_hp_html)
     croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
+    od_reporte.append((
+        f"Croquis {tipo_croquis} — hora pico",
+        croquis_svg.filas_tabla_od(volumenes_hp, mapeo_final, tipo_croquis,
+                                   etiquetas_od),
+    ))
     _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
 
     # ── Croquis total ──
@@ -981,6 +989,11 @@ if mapa is not None and len(mapeo_final) > 0:
     )
     svg_total = croquis_svg.extraer_svg(svg_total_html)
     croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo", svg_total))
+    od_reporte.append((
+        f"Croquis {tipo_croquis} — total del censo",
+        croquis_svg.filas_tabla_od(volumenes_total, mapeo_final, tipo_croquis,
+                                   etiquetas_od),
+    ))
     _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
 
 # ─────────────────────────────────────────────────────────────
@@ -1018,6 +1031,7 @@ ctx_reporte = {
     "excluidos": excluidos_final,
     "imagenes": imagenes,
     "croquis": croquis_reporte,
+    "od": od_reporte,
 }
 
 col_pdf, col_docx = st.columns(2)

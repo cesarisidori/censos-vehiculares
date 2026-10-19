@@ -83,6 +83,7 @@ mapeo_croquis = {m: p for m, p in MAPEO_CRUZ.items() if m in res["movs"]}
 nombres_ramas = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
 
 croquis = []
+od = []
 if mapeo_croquis:
     hp_ini, hp_fin = res["pico"][0], res["pico"][1]
     df_hp = df_validos[(df_validos["hora_inicio"] >= hp_ini)
@@ -98,7 +99,14 @@ if mapeo_croquis:
         ("Croquis Cruz — hora pico", crq.extraer_svg(svg_hp_html)),
         ("Croquis Cruz — total del censo", crq.extraer_svg(svg_total_html)),
     ]
+    od = [
+        ("Croquis Cruz — hora pico",
+         crq.filas_tabla_od(vol_hp, mapeo_croquis, "Cruz", nombres_ramas)),
+        ("Croquis Cruz — total del censo",
+         crq.filas_tabla_od(vol_total, mapeo_croquis, "Cruz", nombres_ramas)),
+    ]
     print(f"Croquis: {len(croquis)} listos para el reporte")
+    print(f"Tablas O-D: {len(od)} listas para el reporte")
 
 # ── 4) Convertir figuras a PNG ──
 print("Convirtiendo figuras a PNG (mirage)...")
@@ -120,6 +128,7 @@ pdf_path = rep.gen_pdf(
     subtitle=SUBTITULO,
     date=date.today(),
     croquis=croquis,
+    od=od,
 )
 print(f"PDF: {pdf_path}")
 

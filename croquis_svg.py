@@ -176,6 +176,77 @@ def calcular_entradas_salidas_T(volumenes, mapeo):
     return entradas, salidas
 
 
+RAMAS_OD = {
+    "Cruz": ("N", "S", "E", "O"),
+    "T": RAMAS_T,
+    "Ruta": ("O", "E"),
+}
+
+NOMBRES_RAMA = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
+
+
+def calcular_matriz_od(volumenes, mapeo, tipo):
+    """
+    Matriz origen-destino a partir de los volúmenes y el mapeo.
+
+    Devuelve (ramas, matriz): `matriz[i][j]` es el volumen que va de
+    `ramas[i]` a `ramas[j]`, o None si ese movimiento no existe en el
+    croquis (diagonal / giro en U, o giro imposible de la T).
+
+    Para Ruta se asume O_IZQ = Oeste→Este (ida) y O_FTE = Este→Oeste
+    (vuelta), que es la orientación de las flechas del SVG.
+    """
+    ramas = RAMAS_OD.get(tipo, RAMAS_OD["Cruz"])
+    idx = {r: i for i, r in enumerate(ramas)}
+    matriz = [[None] * len(ramas) for _ in ramas]
+
+    # Volumen por slot: misma lógica que entradas/salidas (un slot, un mov).
+    slots = {pos: volumenes.get(mov, 0) for mov, pos in mapeo.items()}
+
+    if tipo == "Ruta":
+        matriz[idx["O"]][idx["E"]] = slots.get("O_IZQ", 0)
+        matriz[idx["E"]][idx["O"]] = slots.get("O_FTE", 0)
+        return ramas, matriz
+
+    destino = DESTINO_T if tipo == "T" else DESTINO
+    for (rama, dir_), dest in destino.items():
+        if rama not in idx or dest is None or dest not in idx:
+            continue
+        matriz[idx[rama]][idx[dest]] = slots.get(f"{rama}_{dir_}", 0)
+    return ramas, matriz
+
+
+def filas_tabla_od(volumenes, mapeo, tipo, etiquetas=None):
+    """
+    Filas listas para la tabla O-D del reporte:
+    encabezado + una fila por origen + fila Total.
+    `etiquetas` permite usar nombres de calle ({rama: texto}).
+    """
+    ramas, matriz = calcular_matriz_od(volumenes, mapeo, tipo)
+    etiquetas = etiquetas or {}
+
+    def _lbl(rama):
+        return etiquetas.get(rama) or NOMBRES_RAMA.get(rama, rama)
+
+    totales_col = [0] * len(ramas)
+    filas = [["Origen / Destino"] + [_lbl(r) for r in ramas] + ["Total"]]
+    for i, rama in enumerate(ramas):
+        fila = [_lbl(rama)]
+        total_fila = 0
+        for j, valor in enumerate(matriz[i]):
+            if valor is None:
+                fila.append(GUION)
+            else:
+                fila.append(str(int(valor)))
+                total_fila += int(valor)
+                totales_col[j] += int(valor)
+        fila.append(str(total_fila))
+        filas.append(fila)
+    filas.append(["Total"] + [str(v) for v in totales_col]
+                 + [str(sum(totales_col))])
+    return filas
+
+
 def renderizar_svg_cruz(volumenes, mapeo, nombres_ramas,
                         ruta_svg="assets/croquis_cruz.svg"):
     """

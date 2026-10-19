@@ -20,6 +20,7 @@ Ambos se embeben como imágenes en el PDF y el DOCX.
     excluidos                         list[str]
     imagenes                          list[(titulo_seccion, png_bytes | None)]
     croquis                           list[(titulo_seccion, svg_str)]
+    od                                list[(titulo_seccion, filas_tabla_od)]
 
 Tipografía:
 - PDF  → DejaVu Sans TTF **embebida** (fonts/ del proyecto → sistema →
@@ -399,6 +400,59 @@ def _tabla_pdf(datos, col_widths=None, fuente=8, familia="Helvetica",
     return tabla
 
 
+def _tabla_od_pdf(datos, ancho, fuente=7, familia="Helvetica"):
+    """
+    Tabla O-D compacta: encabezado sombreado, celdas numéricas centradas,
+    totales de fila/columna resaltados. Las celdas '—' (movimiento
+    inexistente) quedan sin valor.
+    """
+    from reportlab.lib import colors
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import Paragraph, Table, TableStyle
+
+    negrita = "Helvetica-Bold" if familia == "Helvetica" else "DejaVu-Bold"
+    estilo_enc = ParagraphStyle("ODEnc", fontName=negrita, fontSize=fuente,
+                                leading=fuente + 1.5, alignment=1)
+    estilo_lbl = ParagraphStyle("ODLbl", fontName=familia, fontSize=fuente,
+                                leading=fuente + 1.5)
+
+    datos = [list(fila) for fila in datos]
+    n_cols = len(datos[0])
+    ancho_lbl = min(3.6 * cm, ancho * 0.30)
+    ancho_tot = 1.4 * cm
+    ancho_ramas = max(1.2 * cm,
+                      (ancho - ancho_lbl - ancho_tot) / max(1, n_cols - 2))
+    col_widths = [ancho_lbl] + [ancho_ramas] * (n_cols - 2) + [ancho_tot]
+
+    enc = [Paragraph(escape(str(c)), estilo_enc) for c in datos[0]]
+    cuerpo = []
+    for fila in datos[1:]:
+        cuerpo.append([Paragraph(escape(str(fila[0])), estilo_lbl)]
+                      + [str(v) for v in fila[1:]])
+
+    tabla = Table([enc] + cuerpo, colWidths=col_widths)
+    tabla.setStyle(TableStyle([
+        ("FONTNAME", (0, 0), (-1, -1), familia),
+        ("FONTSIZE", (0, 0), (-1, -1), fuente),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#c0c0c0")),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 0), (-1, -1), "CENTER"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#e8eef7")),
+        ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#e8eef7")),
+        ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#f5f7fa")),
+        ("BACKGROUND", (-1, 1), (-1, -1), colors.HexColor("#d6e4f0")),
+        ("FONTNAME", (0, -1), (-1, -1), negrita),
+        ("FONTNAME", (-1, 1), (-1, -1), negrita),
+    ]))
+    tabla.hAlign = "CENTER"
+    return tabla
+
+
 def _tabla_pdf_multinivel(columnas, filas, enc_nivel2, col_widths,
                           fuente=7, familia="Helvetica"):
     """
@@ -594,18 +648,24 @@ def _historia_imagenes(con_imagenes, ancho_util, negrita):
 
 
 def _croquis_flowables(con_imagenes, ancho_util, negrita, separacion=8,
-                       titulos=None):
+                       titulos=None, tablas=None, familia="Helvetica"):
     """
     Flowables de los croquis: al 80% del ancho útil (20% más chicos que
-    antes), apilados, SIN saltos de página forzados entre ellos (así entran
-    los dos en una misma página al final del reporte). Cada uno con su
-    título arriba; si se pasan `titulos`, reemplazan a los de `con_imagenes`.
+    antes), apilados y sin saltos de página forzados entre ellos: si los
+    dos entran, comparten página; si no, fluyen a la siguiente. Cada uno
+    con su título arriba; si se pasan `titulos`, reemplazan a los de
+    `con_imagenes`.
+
+    `tablas` es una lista paralela de filas O-D (una por croquis): si hay,
+    se dibuja debajo de la imagen correspondiente.
     """
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import Image, KeepTogether, Paragraph, Spacer
 
     estilo_titulo = ParagraphStyle("TituloCroquis", fontName=negrita,
                                    fontSize=10, leading=12)
+    estilo_od = ParagraphStyle("TituloOD", fontName=negrita,
+                               fontSize=9, leading=11, spaceBefore=2)
     ancho_imagen = ancho_util * 0.8
     flujables = []
     for i, (titulo, png) in enumerate(con_imagenes):
@@ -615,11 +675,18 @@ def _croquis_flowables(con_imagenes, ancho_util, negrita, separacion=8,
         imagen = Image(io.BytesIO(png), width=ancho_imagen,
                        height=h * (ancho_imagen / w))
         imagen.hAlign = "CENTER"
-        flujables.append(KeepTogether([
+        bloque = [
             Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
             Spacer(1, 4),
             imagen,
-        ]))
+        ]
+        if tablas and i < len(tablas) and tablas[i]:
+            bloque += [
+                Spacer(1, 6),
+                Paragraph("Origen / Destino", estilo_od),
+                _tabla_od_pdf(tablas[i], ancho_imagen, familia=familia),
+            ]
+        flujables.append(KeepTogether(bloque))
         flujables.append(Spacer(1, separacion))
     return flujables
 
@@ -763,10 +830,12 @@ def generar_pdf(ctx):
             plantilla = "vertical"
         story.append(PageBreak())
         story.append(Paragraph("Croquis", h2))
+        tablas_od = [filas for _, filas in (ctx.get("od") or [])]
         story += _croquis_flowables(
             croquis_pngs, ancho_util, negrita, separacion=20,
             titulos=["Movimientos en Hora Pico",
                      "Movimientos Volumen Total"],
+            tablas=tablas_od, familia=familia,
         )
 
     doc.build(story)
@@ -1014,7 +1083,7 @@ def generar_docx(ctx):
     return buf.getvalue()
 
 
-def gen_pdf(imgs, output_path, title, subtitle, date, croquis=None):
+def gen_pdf(imgs, output_path, title, subtitle, date, croquis=None, od=None):
     """Wrapper function for test compatibility. Genera PDF y guarda en archivo."""
     ctx = {
         "titulo": title,
@@ -1022,6 +1091,7 @@ def gen_pdf(imgs, output_path, title, subtitle, date, croquis=None):
         "fecha": date,
         "imagenes": imgs,
         "croquis": croquis or [],
+        "od": od or [],
         "fhp_data": {
             "fhp": 0.813,
             "hora_pico_inicio": "07:30",
@@ -1047,7 +1117,7 @@ def gen_pdf(imgs, output_path, title, subtitle, date, croquis=None):
     return output_path
 
 
-def gen_docx(imgs, output_path, title, subtitle, date, croquis=None):
+def gen_docx(imgs, output_path, title, subtitle, date, croquis=None, od=None):
     """Wrapper function for test compatibility. Genera DOCX y guarda en archivo."""
     ctx = {
         "titulo": title,
@@ -1055,6 +1125,7 @@ def gen_docx(imgs, output_path, title, subtitle, date, croquis=None):
         "fecha": date,
         "imagenes": imgs,
         "croquis": croquis or [],
+        "od": od or [],
         "fhp_data": {
             "fhp": 0.813,
             "hora_pico_inicio": "07:30",
