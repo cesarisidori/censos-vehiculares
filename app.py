@@ -21,6 +21,7 @@ import graficos as grf
 import procesar_censo3 as motor
 import reportes as rep
 import croquis_svg
+import excel_graficos
 
 
 # ─────────────────────────────────────────────────────────────
@@ -726,12 +727,6 @@ with st.spinner("Procesando..."):
         st.error(f"❌ Error al procesar el censo: {e}")
         st.stop()
 
-    # Excel de salida en memoria, para el botón de descarga
-    salida_buffer = motor.exportar_buffer(
-        res["fhp_data"], res["resumen_agr"], res["resumen_plano"],
-        res["pesados_hp"], res["pesados_total"], res["totales"], res["df"],
-    )
-
 df = res["df"]
 movs = res["movs"]
 mapa = res["mapa"]
@@ -807,6 +802,11 @@ df_cs = grf.volumen_por_calle_sentido(df_validos, movs, mapa_dict)
 
 # (título de sección, figura) — se reutilizan para los reportes PDF/DOCX
 figuras = []
+
+# Datos de los gráficos por calle (para el Excel de salida); pueden quedar
+# vacíos si no hay hoja MAPA o no hay movimientos mapeados.
+agg_hora = None
+horas_hp = []
 
 if mapa is not None and not df_cs.empty:
     # ── Líneas: censo completo, todas las calles ──
@@ -911,6 +911,38 @@ if pesados_hp is not None:
                         fig_pesados))
     else:
         st.info("No hay movimientos con pesados para graficar.")
+
+
+# ─────────────────────────────────────────────────────────────
+# 7b) Excel de salida con gráficos nativos
+# ─────────────────────────────────────────────────────────────
+# Se genera acá (y no antes de los gráficos) para reutilizar los mismos
+# datos ya calculados. El motor sólo recibe hojas de datos y el callback
+# que agrega los gráficos nativos de openpyxl. Si algo falla, se exporta
+# igual sin gráficos.
+try:
+    hojas_graf, al_escribir = excel_graficos.preparar_graficos(
+        df_cs,
+        agg_hora=agg_hora,
+        periodos_hp=horas_hp,
+        serie_hp=serie_hp,
+        serie_total=serie_total,
+        pesados_hp=pesados_hp,
+        titulo=titulo_base,
+        subtitulo=subtitulo_base,
+        paleta=paleta,
+    )
+    salida_buffer = motor.exportar_buffer(
+        fhp_data, resumen_agr, resumen_plano,
+        pesados_hp, pesados_total, totales, df,
+        hojas_extra=hojas_graf, al_escribir=al_escribir,
+    )
+except Exception as e:
+    st.warning(f"⚠️ No se pudieron agregar los gráficos al Excel: {e}")
+    salida_buffer = motor.exportar_buffer(
+        fhp_data, resumen_agr, resumen_plano,
+        pesados_hp, pesados_total, totales, df,
+    )
 
 
 # ─────────────────────────────────────────────────────────────

@@ -27,11 +27,14 @@ en Linux, `python3`.
 
 ## Architecture
 - `app.py` — Interfaz Streamlit. Punto de entrada. Importa `procesar_censo3`,
-  `graficos`, `reportes` y `croquis_svg`.
+  `graficos`, `reportes`, `croquis_svg` y `excel_graficos`.
 - `procesar_censo3.py` — Motor de cálculo. `leer_censo()` lee las 3 hojas
   (DATOS/MAPA/CONFIG) en una sola pasada; `procesar()` es el pipeline
   completo (lo usan la CLI y la app) y acepta ruta/buffer (BytesIO) o
   `precargado` con las hojas ya leídas, para no re-leer el Excel.
+  `exportar()`/`exportar_buffer()` aceptan `hojas_extra` y un callback
+  `al_escribir(libro)` que recibe el libro abierto (así la app agrega los
+  gráficos nativos sin que el motor importe openpyxl).
 - `graficos.py` — Figuras Plotly puras (reciben datos, devuelven `Figure`).
   Define `PALETA_DEFAULT` y `PALETAS_PREDEFINIDAS` (combinaciones estilo
   Excel, pastel, vibrante, etc.); la app ofrece esas combinaciones y,
@@ -42,6 +45,11 @@ en Linux, `python3`.
 - `croquis_svg.py` — Renderiza los croquis (cruz, T, ruta) inyectando los
   valores de cada movimiento en los SVG base. Limpia el SVG antes de
   inyectarlo (elimina metadata de Inkscape, reemplaza `context-stroke`).
+- `excel_graficos.py` — Gráficos **nativos** (openpyxl: línea, barras, dona)
+  para el Excel de salida. `preparar_graficos()` devuelve `hojas_extra`
+  (datos en formato ancho) y el callback `al_escribir` que el motor invoca
+  con el libro abierto; los gráficos quedan en la hoja `Gráficos` y las
+  series usan la paleta elegida en la app. El motor nunca importa openpyxl.
 - `assets/croquis_cruz.svg`, `assets/croquis_T.svg`, `assets/croquis_ruta.svg`
   — SVGs base con IDs de texto para cada movimiento y caja.
 - `crear_ejemplo.py` — Genera los 3 Excel de ejemplo.

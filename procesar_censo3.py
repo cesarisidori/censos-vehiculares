@@ -548,7 +548,7 @@ def imprimir(df, movs, totales, pico, resumen_plano_df, resumen_agr_df,
 # ─────────────────────────────────────────────────────────────
 def _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
                     pesados_hp, pesados_total, totales, df,
-                    hojas_extra=None):
+                    hojas_extra=None, al_escribir=None):
     """Escribe todas las hojas del resultado en un ExcelWriter abierto."""
     # 1) FHP
     fhp_df = pd.DataFrame([
@@ -588,24 +588,32 @@ def _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
         for nombre, hoja in hojas_extra.items():
             hoja.to_excel(w, sheet_name=nombre, index=False)
 
+    # 9) Post-proceso del libro abierto (p. ej. gráficos nativos de la app).
+    #    El motor no conoce openpyxl: sólo entrega el libro al callback.
+    if al_escribir is not None:
+        al_escribir(w.book)
+
 
 def exportar(salida, fhp_data, resumen_agr_df, resumen_plano_df,
-             pesados_hp, pesados_total, totales, df, hojas_extra=None):
+             pesados_hp, pesados_total, totales, df, hojas_extra=None,
+             al_escribir=None):
     """Exporta el resultado a un archivo (ruta o buffer)."""
     with pd.ExcelWriter(salida, engine="openpyxl") as w:
         _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
-                        pesados_hp, pesados_total, totales, df, hojas_extra)
+                        pesados_hp, pesados_total, totales, df, hojas_extra,
+                        al_escribir)
     print(f"\n✅ Exportado: {salida}")
 
 
 def exportar_buffer(fhp_data, resumen_agr_df, resumen_plano_df,
                     pesados_hp, pesados_total, totales, df,
-                    hojas_extra=None):
+                    hojas_extra=None, al_escribir=None):
     """Exporta el resultado a un buffer en memoria (descarga desde la app)."""
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:
         _escribir_hojas(w, fhp_data, resumen_agr_df, resumen_plano_df,
-                        pesados_hp, pesados_total, totales, df, hojas_extra)
+                        pesados_hp, pesados_total, totales, df, hojas_extra,
+                        al_escribir)
     buf.seek(0)
     return buf
 
