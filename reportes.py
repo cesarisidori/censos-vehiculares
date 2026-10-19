@@ -593,24 +593,32 @@ def _historia_imagenes(con_imagenes, ancho_util, negrita):
     return flujables
 
 
-def _croquis_flowables(con_imagenes, ancho_util, negrita, separacion=8):
+def _croquis_flowables(con_imagenes, ancho_util, negrita, separacion=8,
+                       titulos=None):
     """
-    Flowables de los croquis: a ancho completo, apilados, SIN saltos de
-    página forzados entre ellos (así entran los dos en una misma página al
-    final del reporte). Cada uno con su título arriba.
+    Flowables de los croquis: al 80% del ancho útil (20% más chicos que
+    antes), apilados, SIN saltos de página forzados entre ellos (así entran
+    los dos en una misma página al final del reporte). Cada uno con su
+    título arriba; si se pasan `titulos`, reemplazan a los de `con_imagenes`.
     """
     from reportlab.lib.styles import ParagraphStyle
     from reportlab.platypus import Image, KeepTogether, Paragraph, Spacer
 
     estilo_titulo = ParagraphStyle("TituloCroquis", fontName=negrita,
                                    fontSize=10, leading=12)
+    ancho_imagen = ancho_util * 0.8
     flujables = []
-    for titulo, png in con_imagenes:
+    for i, (titulo, png) in enumerate(con_imagenes):
+        if titulos and i < len(titulos):
+            titulo = titulos[i]
         w, h = _png_dims(png)
+        imagen = Image(io.BytesIO(png), width=ancho_imagen,
+                       height=h * (ancho_imagen / w))
+        imagen.hAlign = "CENTER"
         flujables.append(KeepTogether([
             Paragraph(escape(_sin_emoji(titulo)), estilo_titulo),
-            Image(io.BytesIO(png), width=ancho_util,
-                  height=h * (ancho_util / w)),
+            Spacer(1, 4),
+            imagen,
         ]))
         flujables.append(Spacer(1, separacion))
     return flujables
@@ -755,7 +763,11 @@ def generar_pdf(ctx):
             plantilla = "vertical"
         story.append(PageBreak())
         story.append(Paragraph("Croquis", h2))
-        story += _croquis_flowables(croquis_pngs, ancho_util, negrita)
+        story += _croquis_flowables(
+            croquis_pngs, ancho_util, negrita, separacion=20,
+            titulos=["Movimientos en Hora Pico",
+                     "Movimientos Volumen Total"],
+        )
 
     doc.build(story)
     return buf.getvalue()
