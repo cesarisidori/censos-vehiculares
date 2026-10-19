@@ -327,3 +327,11 @@ def _crear_graficos(workbook, specs, paleta, titulo="", subtitulo=""):
         col = _COLUMNAS_ANCLA[i % len(_COLUMNAS_ANCLA)]
         fila = _FILA_INICIO + (i // len(_COLUMNAS_ANCLA)) * _PASO_FILA
         hoja.add_chart(chart, f"{get_column_letter(col)}{fila}")
+
+    # Las hojas auxiliares de datos se ocultan (los gráficos siguen
+    # funcionando) y el libro abre en FHP.
+    for nombre in list(workbook.sheetnames):
+        if nombre.startswith("Graf_"):
+            workbook[nombre].sheet_state = "hidden"
+    if "FHP" in workbook.sheetnames:
+        workbook.active = workbook.sheetnames.index("FHP")

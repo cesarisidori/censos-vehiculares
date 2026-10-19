@@ -19,9 +19,12 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
   usa el mapeo fijo (`M1`→`O_IZQ`, `M2`→`O_FTE`, …).
 - El MAPA es la fuente de verdad: los movimientos de DATOS sin fila en
   MAPA se ignoran en todos los cálculos y gráficos.
+- Tablas **Origen / Destino** bajo cada croquis (PDF), en el DOCX y en
+  pantalla, con totales por fila/columna.
 - Carga manual de **Fecha, Día, Ubicación, Lugar y Analista** para el reporte.
-- Descarga de resultados en **Excel**, **PDF** (con fuente DejaVu embebida)
-  y **DOCX** (fuente Arial, se abre en Word y LibreOffice).
+- Descarga de resultados en **Excel** (con **gráficos nativos**, editables en
+  Excel/OnlyOffice), **PDF** (con fuente DejaVu embebida) y **DOCX** (fuente
+  Arial, se abre en Word y LibreOffice).
 
 ## Instalación
 
@@ -47,6 +50,16 @@ streamlit run app.py
 
 Las claves `ubicacion`, `lugar` y `analista` de la hoja `CONFIG` precargan
 los campos homónimos del reporte (opcional).
+
+## Tests
+
+```bash
+pip install -r requirements-dev.txt
+python3 -m pytest tests/            # o: python3 tests/test_motor.py
+```
+
+Cubren hora pico, FHP, exclusión de tipos, total O-D y la exportación del
+Excel con gráficos nativos.
 
 ## Tests manuales
 

@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 import pandas as pd
+import plotly.io as pio
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -127,6 +128,15 @@ def _procesar(contenido: bytes, excluidos: tuple, nombre_fila_total: str,
     )
 
 
+@st.cache_data(show_spinner=False)
+def _fig_a_png(json_figura: str):
+    """PNG de una figura Plotly, cacheado por el JSON de la figura.
+
+    Evita reconvertir con mirage en cada rerun si la figura no cambió.
+    """
+    return rep.fig_a_png(pio.from_json(json_figura))
+
+
 def _imagenes_reporte(figuras):
     """PNG de cada figura con mirage (respeta el aspect ratio original)."""
     if not MIRAGE_OK:
@@ -138,7 +148,7 @@ def _imagenes_reporte(figuras):
     resultados = []
     for titulo, fig in figuras:
         try:
-            png = rep.fig_a_png(fig)
+            png = _fig_a_png(fig.to_json())
             resultados.append((titulo, png))
         except Exception as e:
             st.error(f"Error convirtiendo {titulo}: {e}")
@@ -265,11 +275,79 @@ def _generar_docx(ctx):
     return rep.generar_docx(ctx)
 
 
+def _od_a_dataframe(filas):
+    """Convierte las filas O-D (encabezado + datos) en un DataFrame."""
+    return pd.DataFrame(filas[1:], columns=filas[0])
+
+
 def _mostrar_tabla_od(filas):
     """Muestra en la app la misma tabla Origen / Destino del reporte."""
-    df = pd.DataFrame(filas[1:], columns=filas[0])
     st.markdown("**Origen / Destino**")
-    st.dataframe(df.set_index("Origen / Destino"), use_container_width=True)
+    st.dataframe(_od_a_dataframe(filas).set_index("Origen / Destino"),
+                 use_container_width=True)
+
+
+def _validar_censo(df, mapa, movs):
+    """Revisa el Excel leído y devuelve [(nivel, mensaje)].
+
+    Niveles: "error" (no se puede procesar), "warning" (dato inconsistente)
+    o "info" (aviso). No corta la ejecución: la app decide qué mostrar.
+    """
+    avisos = []
+    if df is None or df.empty:
+        return [("error", "La hoja DATOS está vacía.")]
+    if "tipo_vehiculo" not in df.columns:
+        avisos.append(("error",
+                       "La hoja DATOS no tiene la columna 'tipo_vehiculo'."))
+
+    movs_datos = {str(m).strip() for m in movs}
+    if mapa is None:
+        avisos.append(("info", "No se detectó la hoja MAPA: se omiten el "
+                       "resumen agrupado y los croquis."))
+        return avisos
+
+    movs_mapa = {str(m).strip() for m in mapa["movimiento"].dropna()}
+    huerfanos = sorted(movs_datos - movs_mapa)
+    if huerfanos:
+        muestra = ", ".join(huerfanos[:12]) + ("…" if len(huerfanos) > 12 else "")
+        avisos.append(("warning",
+                       f"{len(huerfanos)} movimiento(s) de DATOS sin fila en "
+                       f"MAPA (se ignoran): {muestra}"))
+    faltantes = sorted(movs_mapa - movs_datos)
+    if faltantes:
+        muestra = ", ".join(faltantes[:12]) + ("…" if len(faltantes) > 12 else "")
+        avisos.append(("warning",
+                       f"{len(faltantes)} fila(s) de MAPA sin columna en DATOS "
+                       f"(se ignoran): {muestra}"))
+    return avisos
+
+
+def _mostrar_avisos(avisos):
+    """Muestra los avisos de _validar_censo con el nivel adecuado."""
+    iconos = {"error": st.error, "warning": st.warning, "info": st.info}
+    for nivel, mensaje in avisos:
+        iconos.get(nivel, st.info)(mensaje)
+    return any(nivel == "error" for nivel, _ in avisos)
+
+
+def _tabla_resumen(fhp_data, pesados_hp, totales, excluidos):
+    """Indicadores clave para la hoja 'Resumen' del Excel de salida."""
+    filas = [
+        ("Hora pico", f'{fhp_data["hora_pico_inicio"]} – '
+                      f'{fhp_data["hora_pico_fin"]}'),
+        ("Volumen hora pico", int(fhp_data["volumen_hp"])),
+        ("Bloque máximo", f'{fhp_data["bloque_max_inicio"]} – '
+                          f'{fhp_data["bloque_max_fin"]}'),
+        ("Volumen máx. 15 min", int(fhp_data["volumen_max_15min"])),
+        ("FHP", round(float(fhp_data["fhp"]), 3)),
+        ("Volumen total del censo", int(totales["TOTAL"].sum())),
+    ]
+    if pesados_hp is not None and "Total" in pesados_hp.columns:
+        pct = pesados_hp.loc["% pesados"].get("Total", 0)
+        filas.append(("% pesados (hora pico)", round(float(pct), 2)))
+    filas.append(("Tipos excluidos",
+                  ", ".join(excluidos) if excluidos else "—"))
+    return pd.DataFrame(filas, columns=["Indicador", "Valor"])
 
 
 def _tabla_agrupada_html(resumen_agr) -> str:
@@ -501,6 +579,10 @@ except Exception as e:
     st.error(f"❌ No se pudo leer el archivo: {e}")
     st.stop()
 
+# Validación temprana: avisa antes de procesar si hay algo inconsistente.
+if _mostrar_avisos(_validar_censo(df_inicial, mapa_inicial, movs_iniciales)):
+    st.stop()
+
 tipos_detectados = []
 if "tipo_vehiculo" in df_inicial.columns:
     tipos_detectados = sorted(df_inicial["tipo_vehiculo"].dropna()
@@ -533,6 +615,7 @@ with col1:
         options=tipos_detectados,
         default=[t for t in excluidos_default if t in tipos_detectados],
         label_visibility="collapsed",
+        key="sel_excluidos",
     )
 
 with col2:
@@ -542,12 +625,14 @@ with col2:
         value=cfg_inicial.get("nombre_fila_total",
                               motor.NOMBRE_FILA_TOTAL_DEFAULT),
         label_visibility="collapsed",
+        key="inp_nombre_total",
     )
 
 st.markdown("**Tipos pesados** (para el cálculo del % de pesados)")
 calcular_pesados = st.checkbox(
     "Calcular % de vehículos pesados",
     value=cfg_inicial.get("calcular_pct_pesados", "NO").strip().upper() == "SI",
+    key="chk_pesados",
 )
 
 tipos_pesados_default = [t.strip() for t in
@@ -559,6 +644,7 @@ tipos_pesados = st.multiselect(
     default=[t for t in tipos_pesados_default
              if t in tipos_detectados and t not in excluidos],
     disabled=not calcular_pesados,
+    key="sel_pesados",
 )
 
 
@@ -634,6 +720,7 @@ with col_t1:
         value="",
         placeholder="Ej: VOLUMEN TRÁNSITO",
         help="Si lo dejás vacío, se usa 'VOLUMEN TRÁNSITO <calle>'.",
+        key="inp_titulo_graf",
     )
 
 with col_t2:
@@ -642,6 +729,7 @@ with col_t2:
         value="",
         placeholder="Ej: DOMINGO 26 DE JULIO DE 2026",
         help="Si lo dejás vacío, se usa el Día + la Fecha del reporte.",
+        key="inp_subtitulo_graf",
     )
 
 with st.expander("🖌️ Paleta de colores", expanded=True):
@@ -650,12 +738,14 @@ with st.expander("🖌️ Paleta de colores", expanded=True):
     nombres_paletas = list(grf.PALETAS_PREDEFINIDAS)
     col_sel, col_vista = st.columns([1, 2])
     with col_sel:
-        nombre_paleta = st.selectbox("Combinación", nombres_paletas)
+        nombre_paleta = st.selectbox("Combinación", nombres_paletas,
+                                     key="sel_paleta")
     paleta_base = list(grf.PALETAS_PREDEFINIDAS[nombre_paleta])
     with col_vista:
         st.markdown(_muestras_paleta(paleta_base), unsafe_allow_html=True)
 
-    personalizar = st.checkbox("Personalizar colores manualmente")
+    personalizar = st.checkbox("Personalizar colores manualmente",
+                               key="chk_personalizar")
     if personalizar:
         # Al cambiar la combinación, los pickers vuelven a sus colores.
         if st.session_state.get("_paleta_base_sel") != nombre_paleta:
@@ -706,16 +796,36 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────
-# 5) Procesamiento
+# 4c) Restablecer configuración
 # ─────────────────────────────────────────────────────────────
-st.divider()
-if not st.button("▶️ Procesar censo", type="primary"):
-    st.stop()
+with st.expander("♻️ Restablecer configuración"):
+    st.caption("Vuelve a los valores por defecto del archivo (hoja CONFIG) "
+               "y limpia los reportes ya preparados.")
+    if st.button("Restablecer", use_container_width=True):
+        claves = [
+            "sel_excluidos", "inp_nombre_total", "chk_pesados", "sel_pesados",
+            "inp_fecha", "inp_dia", "inp_ubicacion", "inp_lugar",
+            "inp_analista", "sel_paleta", "chk_personalizar",
+            "inp_titulo_graf", "inp_subtitulo_graf", "tipo_croquis_sel",
+            "_paleta_base_sel", "_dia_auto_previo", "_tipo_croquis_archivo",
+            "_gen_pdf", "_gen_docx",
+        ]
+        claves += [f"color_serie_{i}" for i in range(8)]
+        for clave in claves:
+            st.session_state.pop(clave, None)
+        st.rerun()
 
-with st.spinner("Procesando..."):
+
+# ─────────────────────────────────────────────────────────────
+# 5) Procesamiento (automático y cacheado)
+# ─────────────────────────────────────────────────────────────
+# No hay botón: al subir el archivo (y ante cada cambio de configuración)
+# se procesa solo. `_procesar` está cacheado, así que sólo recalcula si
+# cambian el archivo o la configuración; cambiar paleta o croquis es
+# instantáneo.
+with st.status("Procesando censo…", expanded=False) as estado:
+    estado.write("Calculando hora pico, FHP, resumen y pesados…")
     try:
-        # El pipeline está cacheado y reutiliza la lectura única del Excel
-        # (no se vuelve a leer el archivo).
         res = _procesar(
             contenido,
             tuple(excluidos or motor.TIPOS_EXCLUIDOS_DEFAULT),
@@ -724,8 +834,10 @@ with st.spinner("Procesando..."):
             tuple(tipos_pesados),
         )
     except Exception as e:
+        estado.update(label="Error al procesar", state="error")
         st.error(f"❌ Error al procesar el censo: {e}")
         st.stop()
+    estado.update(label="✅ Censo procesado", state="complete")
 
 df = res["df"]
 movs = res["movs"]
@@ -741,51 +853,51 @@ pesados_total = res["pesados_total"]
 
 
 # ─────────────────────────────────────────────────────────────
-# 6) Mostrar resultados
+# 6) Resultados, gráficos, croquis y descargas (en pestañas)
 # ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("📊 Resultados")
+tab_res, tab_graf, tab_croq, tab_desc = st.tabs(
+    ["📊 Resultados", "📈 Gráficos", "🗺️ Croquis", "⬇️ Descargas"]
+)
 
-# Métricas destacadas
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Hora pico",
-          f"{fhp_data['hora_pico_inicio']} – {fhp_data['hora_pico_fin']}")
-c2.metric("Volumen HP", f"{fhp_data['volumen_hp']:,}")
-c3.metric("Volumen máx 15 min", f"{fhp_data['volumen_max_15min']:,}",
-          help=f"Bloque {fhp_data['bloque_max_inicio']} – "
-               f"{fhp_data['bloque_max_fin']}")
-c4.metric("FHP", f"{fhp_data['fhp']:.3f}")
+with tab_res:
+    # Métricas destacadas
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Hora pico",
+              f"{fhp_data['hora_pico_inicio']} – {fhp_data['hora_pico_fin']}")
+    c2.metric("Volumen HP", f"{fhp_data['volumen_hp']:,}")
+    c3.metric("Volumen máx 15 min", f"{fhp_data['volumen_max_15min']:,}",
+              help=f"Bloque {fhp_data['bloque_max_inicio']} – "
+                   f"{fhp_data['bloque_max_fin']}")
+    c4.metric("FHP", f"{fhp_data['fhp']:.3f}")
 
-# Tabla agrupada (render HTML con 3 niveles de encabezado)
-if resumen_agr is not None:
-    st.markdown("### 📋 Resumen hora pico (agrupado)")
-    st.markdown(_tabla_agrupada_html(resumen_agr), unsafe_allow_html=True)
-else:
-    st.warning("El archivo no tiene hoja MAPA: se omite el resumen agrupado.")
+    # Tabla agrupada (render HTML con 3 niveles de encabezado)
+    if resumen_agr is not None:
+        st.markdown("### 📋 Resumen hora pico (agrupado)")
+        st.markdown(_tabla_agrupada_html(resumen_agr), unsafe_allow_html=True)
+    else:
+        st.warning("El archivo no tiene hoja MAPA: se omite el resumen "
+                   "agrupado.")
 
-# Pesados
-if pesados_hp is not None:
-    st.markdown("### 🚛 % de pesados — hora pico")
-    st.dataframe(pesados_hp, use_container_width=True)
+    # Pesados
+    if pesados_hp is not None:
+        st.markdown("### 🚛 % de pesados — hora pico")
+        st.dataframe(pesados_hp, use_container_width=True)
 
-if pesados_total is not None:
-    with st.expander("🚛 % de pesados — total del censo"):
-        st.dataframe(pesados_total, use_container_width=True)
+    if pesados_total is not None:
+        with st.expander("🚛 % de pesados — total del censo"):
+            st.dataframe(pesados_total, use_container_width=True)
 
-# Detalles
-with st.expander("📄 Resumen hora pico (plano)"):
-    st.dataframe(resumen_plano, use_container_width=True)
+    # Detalles
+    with st.expander("📄 Resumen hora pico (plano)"):
+        st.dataframe(resumen_plano, use_container_width=True)
 
-with st.expander("📄 Totales por bloque de 15 min"):
-    st.dataframe(totales, use_container_width=True)
+    with st.expander("📄 Totales por bloque de 15 min"):
+        st.dataframe(totales, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────
-# 7) Gráficos
+# 7) Gráficos (dentro de la pestaña, con datos compartidos)
 # ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("📈 Gráficos")
-
 # Título / subtítulo base (editables en Personalización de gráficos)
 titulo_base = titulo_personalizado.strip() or "VOLUMEN TRÁNSITO"
 subtitulo_base = (subtitulo_personalizado.strip()
@@ -808,118 +920,120 @@ figuras = []
 agg_hora = None
 horas_hp = []
 
-if mapa is not None and not df_cs.empty:
-    # ── Líneas: censo completo, todas las calles ──
-    st.markdown("### 📈 Distribución por 15 minutos — censo completo")
-    fig = grf.fig_lineas(df_cs, titulo_base, subtitulo_base, paleta)
-    _, col_cen, _ = st.columns([1, 8, 1])
-    with col_cen:
-        st.plotly_chart(_web(fig, 480), use_container_width=True)
-    figuras.append(("Distribución por 15 minutos — censo completo", fig))
-
-    # ── Barras por hora, una por calle (de a 2 por fila) ──
-    st.markdown("### 📊 Volumen por hora — censo completo")
-    agg_hora = grf.agregar_por_hora(df_cs)
-    figs_hora = []
-    for calle in sorted(agg_hora["calle"].unique()):
-        sub_calle = agg_hora[agg_hora["calle"] == calle]
-        fig = grf.fig_barras_agrupadas(
-            sub_calle, "hora_entera",
-            sorted(sub_calle["hora_entera"].unique()),
-            titulo=f"{titulo_base} {calle}",
-            subtitulo=subtitulo_base,
-            eje_y="VOLUMEN HORARIO",
-            paleta=paleta,
-            height=550,
-        )
-        if fig is None:
-            continue
-        figs_hora.append((f"Volumen por hora — {calle}", fig))
-        figuras.append((f"Volumen por hora — {calle}", fig))
-    _filas_dos_columnas(figs_hora, 320)
-
-    # ── Barras de 15 min en la hora pico, una por calle (de a 2 por fila) ──
-    st.markdown("### 📊 Volumen por 15 min — hora pico")
-    hp_ini, hp_fin = pico[0], pico[1]
-    bloques_hp = totales[(totales["hora_inicio"] >= hp_ini) & (totales["hora_fin"] <= hp_fin)]
-    horas_hp = bloques_hp["hora_inicio"].tolist()
-
-    if subtitulo_personalizado.strip():
-        subtitulo_hp = subtitulo_personalizado.strip()
-    elif subtitulo_base:
-        subtitulo_hp = f"DE {hp_ini} a {hp_fin} DEL {subtitulo_base}"
-    else:
-        subtitulo_hp = ""
-
-    figs_15 = []
-    for calle in sorted(df_cs["calle"].unique()):
-        sub_calle = df_cs[df_cs["calle"] == calle]
-        fig = grf.fig_barras_agrupadas(
-            sub_calle, "hora_inicio", horas_hp,
-            titulo=f"{titulo_base} {calle}",
-            subtitulo=subtitulo_hp,
-            eje_y="VOLUMEN CADA 15 MINUTOS",
-            paleta=paleta,
-            height=550,
-        )
-        if fig is None:
-            continue
-        figs_15.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
-        figuras.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
-    _filas_dos_columnas(figs_15, 320)
-else:
-    st.info("Sin hoja MAPA o sin movimientos mapeados: "
-            "se muestran solo los gráficos de composición.")
-
-# ── Tortas: composición por tipo (incluye tipos excluidos) ──
-st.markdown("### 🥧 Composición por tipo de vehículo")
-
-serie_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
-serie_hp = serie_hp.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
-serie_hp = serie_hp[serie_hp > 0].sort_values(ascending=False)
-
-serie_total = df.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
-serie_total = serie_total[serie_total > 0].sort_values(ascending=False)
-
-fig_t1 = grf.fig_torta(serie_hp, "Composición por tipo — hora pico",
-                       subtitulo_base, paleta)
-fig_t2 = grf.fig_torta(serie_total, "Composición por tipo — censo completo",
-                       subtitulo_base, paleta)
-
-col_torta1, col_torta2 = st.columns(2)
-with col_torta1:
-    if fig_t1 is not None:
-        st.plotly_chart(fig_t1, use_container_width=True)
-with col_torta2:
-    if fig_t2 is not None:
-        st.plotly_chart(fig_t2, use_container_width=True)
-
-if fig_t1 is not None:
-    figuras.append(("Composición por tipo — hora pico", fig_t1))
-if fig_t2 is not None:
-    figuras.append(("Composición por tipo — censo completo", fig_t2))
-
-# ── % de pesados ──
-if pesados_hp is not None:
-    st.markdown("### 📊 % de pesados por movimiento — hora pico")
-    fig_pesados = grf.fig_pesados(pesados_hp, paleta)
-    if fig_pesados is not None:
-        _, col_cen, _ = st.columns([1, 2, 1])
+with tab_graf:
+    if mapa is not None and not df_cs.empty:
+        # ── Líneas: censo completo, todas las calles ──
+        st.markdown("### 📈 Distribución por 15 minutos — censo completo")
+        fig = grf.fig_lineas(df_cs, titulo_base, subtitulo_base, paleta)
+        _, col_cen, _ = st.columns([1, 8, 1])
         with col_cen:
-            st.plotly_chart(fig_pesados, use_container_width=True)
-        figuras.append(("% de pesados por movimiento — hora pico",
-                        fig_pesados))
+            st.plotly_chart(_web(fig, 480), use_container_width=True)
+        figuras.append(("Distribución por 15 minutos — censo completo", fig))
+
+        # ── Barras por hora, una por calle (de a 2 por fila) ──
+        st.markdown("### 📊 Volumen por hora — censo completo")
+        agg_hora = grf.agregar_por_hora(df_cs)
+        figs_hora = []
+        for calle in sorted(agg_hora["calle"].unique()):
+            sub_calle = agg_hora[agg_hora["calle"] == calle]
+            fig = grf.fig_barras_agrupadas(
+                sub_calle, "hora_entera",
+                sorted(sub_calle["hora_entera"].unique()),
+                titulo=f"{titulo_base} {calle}",
+                subtitulo=subtitulo_base,
+                eje_y="VOLUMEN HORARIO",
+                paleta=paleta,
+                height=550,
+            )
+            if fig is None:
+                continue
+            figs_hora.append((f"Volumen por hora — {calle}", fig))
+            figuras.append((f"Volumen por hora — {calle}", fig))
+        _filas_dos_columnas(figs_hora, 320)
+
+        # ── Barras de 15 min en la hora pico, una por calle ──
+        st.markdown("### 📊 Volumen por 15 min — hora pico")
+        hp_ini, hp_fin = pico[0], pico[1]
+        bloques_hp = totales[(totales["hora_inicio"] >= hp_ini)
+                             & (totales["hora_fin"] <= hp_fin)]
+        horas_hp = bloques_hp["hora_inicio"].tolist()
+
+        if subtitulo_personalizado.strip():
+            subtitulo_hp = subtitulo_personalizado.strip()
+        elif subtitulo_base:
+            subtitulo_hp = f"DE {hp_ini} a {hp_fin} DEL {subtitulo_base}"
+        else:
+            subtitulo_hp = ""
+
+        figs_15 = []
+        for calle in sorted(df_cs["calle"].unique()):
+            sub_calle = df_cs[df_cs["calle"] == calle]
+            fig = grf.fig_barras_agrupadas(
+                sub_calle, "hora_inicio", horas_hp,
+                titulo=f"{titulo_base} {calle}",
+                subtitulo=subtitulo_hp,
+                eje_y="VOLUMEN CADA 15 MINUTOS",
+                paleta=paleta,
+                height=550,
+            )
+            if fig is None:
+                continue
+            figs_15.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
+            figuras.append((f"Volumen cada 15 min (hora pico) — {calle}", fig))
+        _filas_dos_columnas(figs_15, 320)
     else:
-        st.info("No hay movimientos con pesados para graficar.")
+        st.info("Sin hoja MAPA o sin movimientos mapeados: "
+                "se muestran solo los gráficos de composición.")
+
+    # ── Tortas: composición por tipo (incluye tipos excluidos) ──
+    st.markdown("### 🥧 Composición por tipo de vehículo")
+
+    serie_hp = df[(df["hora_inicio"] >= pico[0]) & (df["hora_fin"] <= pico[1])]
+    serie_hp = serie_hp.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
+    serie_hp = serie_hp[serie_hp > 0].sort_values(ascending=False)
+
+    serie_total = df.groupby("tipo_vehiculo")[movs].sum().sum(axis=1)
+    serie_total = serie_total[serie_total > 0].sort_values(ascending=False)
+
+    fig_t1 = grf.fig_torta(serie_hp, "Composición por tipo — hora pico",
+                           subtitulo_base, paleta)
+    fig_t2 = grf.fig_torta(serie_total,
+                           "Composición por tipo — censo completo",
+                           subtitulo_base, paleta)
+
+    col_torta1, col_torta2 = st.columns(2)
+    with col_torta1:
+        if fig_t1 is not None:
+            st.plotly_chart(fig_t1, use_container_width=True)
+    with col_torta2:
+        if fig_t2 is not None:
+            st.plotly_chart(fig_t2, use_container_width=True)
+
+    if fig_t1 is not None:
+        figuras.append(("Composición por tipo — hora pico", fig_t1))
+    if fig_t2 is not None:
+        figuras.append(("Composición por tipo — censo completo", fig_t2))
+
+    # ── % de pesados ──
+    if pesados_hp is not None:
+        st.markdown("### 📊 % de pesados por movimiento — hora pico")
+        fig_pesados = grf.fig_pesados(pesados_hp, paleta)
+        if fig_pesados is not None:
+            _, col_cen, _ = st.columns([1, 2, 1])
+            with col_cen:
+                st.plotly_chart(fig_pesados, use_container_width=True)
+            figuras.append(("% de pesados por movimiento — hora pico",
+                            fig_pesados))
+        else:
+            st.info("No hay movimientos con pesados para graficar.")
 
 
 # ─────────────────────────────────────────────────────────────
-# 7b) Excel de salida con gráficos nativos
+# 7b) Preparación del Excel de salida (gráficos nativos)
 # ─────────────────────────────────────────────────────────────
-# Se genera acá (y no antes de los gráficos) para reutilizar los mismos
-# datos ya calculados. El motor sólo recibe hojas de datos y el callback
-# que agrega los gráficos nativos de openpyxl. Si algo falla, se exporta
-# igual sin gráficos.
+# Se preparan acá (reutilizando los datos ya calculados) y se exporta al
+# final, cuando ya están las tablas O-D. El motor sólo recibe hojas de
+# datos y el callback que agrega los gráficos nativos de openpyxl.
 try:
     hojas_graf, al_escribir = excel_graficos.preparar_graficos(
         df_cs,
@@ -932,25 +1046,14 @@ try:
         subtitulo=subtitulo_base,
         paleta=paleta,
     )
-    salida_buffer = motor.exportar_buffer(
-        fhp_data, resumen_agr, resumen_plano,
-        pesados_hp, pesados_total, totales, df,
-        hojas_extra=hojas_graf, al_escribir=al_escribir,
-    )
 except Exception as e:
-    st.warning(f"⚠️ No se pudieron agregar los gráficos al Excel: {e}")
-    salida_buffer = motor.exportar_buffer(
-        fhp_data, resumen_agr, resumen_plano,
-        pesados_hp, pesados_total, totales, df,
-    )
+    st.warning(f"⚠️ No se pudieron preparar los gráficos del Excel: {e}")
+    hojas_graf, al_escribir = {}, None
 
 
 # ─────────────────────────────────────────────────────────────
-# 8) Croquis
+# 8) Croquis (datos compartidos + render en la pestaña)
 # ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("🗺️ Croquis de la intersección")
-
 # ── Inferencias desde el MAPA ──
 nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
 mapeo_default = _inferir_mapeo_default(mapa, movs)
@@ -970,12 +1073,6 @@ else:
 
 mapeo_final = dict(mapeo_default)
 
-if not mapeo_final:
-    st.warning(
-        "No se pudo ubicar ningún movimiento en el croquis. Agregá la "
-        "columna 'posicion' a la hoja MAPA con el mapeador visual."
-    )
-
 # ── Volúmenes ──
 # Hora pico: desde resumen_plano (ya excluye tipos configurados)
 movs_hp = [c for c in resumen_plano.columns if c != "TOTAL"]
@@ -992,115 +1089,164 @@ volumenes_total = {mov: int(df_validos[mov].sum())
 # ── Render de los dos croquis ──
 croquis_reporte = []  # [(título, svg)] para incluir en el reporte PDF/DOCX
 od_reporte = []       # [(título, filas O-D)] para la tabla del PDF
-if mapa is not None and len(mapeo_final) > 0:
-    ancho_contenedor = "900px" if tipo_croquis == "Ruta" else "750px"
-    etiquetas_od = (nombres_extremos if tipo_croquis == "Ruta"
-                    else nombres_ramas)
+filas_od_hp = None    # tablas O-D, también para el Excel de salida
+filas_od_total = None
 
-    # ── Croquis hora pico ──
-    st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
-    svg_hp_html, altura_hp = _render_croquis(tipo_croquis, volumenes_hp, mapeo_final,
-                                             nombres_ramas, nombres_extremos)
-    components.html(
-        f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
-        f'{svg_hp_html}</div>',
-        height=altura_hp,
-        scrolling=False,
-    )
-    svg_hp = croquis_svg.extraer_svg(svg_hp_html)
-    croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
-    filas_od_hp = croquis_svg.filas_tabla_od(
-        volumenes_hp, mapeo_final, tipo_croquis, etiquetas_od)
-    od_reporte.append((f"Croquis {tipo_croquis} — hora pico", filas_od_hp))
-    _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
-    _mostrar_tabla_od(filas_od_hp)
+with tab_croq:
+    if not mapeo_final:
+        st.warning(
+            "No se pudo ubicar ningún movimiento en el croquis. Agregá la "
+            "columna 'posicion' a la hoja MAPA con el mapeador visual."
+        )
 
-    # ── Croquis total ──
-    st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
-    svg_total_html, altura_total = _render_croquis(tipo_croquis, volumenes_total, mapeo_final,
-                                                   nombres_ramas, nombres_extremos)
-    components.html(
-        f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
-        f'{svg_total_html}</div>',
-        height=altura_total,
-        scrolling=False,
-    )
-    svg_total = croquis_svg.extraer_svg(svg_total_html)
-    croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo", svg_total))
-    filas_od_total = croquis_svg.filas_tabla_od(
-        volumenes_total, mapeo_final, tipo_croquis, etiquetas_od)
-    od_reporte.append((f"Croquis {tipo_croquis} — total del censo",
-                       filas_od_total))
-    _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
-    _mostrar_tabla_od(filas_od_total)
+    if mapa is not None and len(mapeo_final) > 0:
+        ancho_contenedor = "900px" if tipo_croquis == "Ruta" else "750px"
+        etiquetas_od = (nombres_extremos if tipo_croquis == "Ruta"
+                        else nombres_ramas)
+
+        # ── Croquis hora pico ──
+        st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
+        svg_hp_html, altura_hp = _render_croquis(
+            tipo_croquis, volumenes_hp, mapeo_final,
+            nombres_ramas, nombres_extremos)
+        components.html(
+            f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
+            f'{svg_hp_html}</div>',
+            height=altura_hp,
+            scrolling=False,
+        )
+        svg_hp = croquis_svg.extraer_svg(svg_hp_html)
+        croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
+        filas_od_hp = croquis_svg.filas_tabla_od(
+            volumenes_hp, mapeo_final, tipo_croquis, etiquetas_od)
+        od_reporte.append((f"Croquis {tipo_croquis} — hora pico", filas_od_hp))
+        _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
+        _mostrar_tabla_od(filas_od_hp)
+
+        # ── Croquis total ──
+        st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
+        svg_total_html, altura_total = _render_croquis(
+            tipo_croquis, volumenes_total, mapeo_final,
+            nombres_ramas, nombres_extremos)
+        components.html(
+            f'<div style="max-width:{ancho_contenedor}; margin:0 auto;">'
+            f'{svg_total_html}</div>',
+            height=altura_total,
+            scrolling=False,
+        )
+        svg_total = croquis_svg.extraer_svg(svg_total_html)
+        croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo",
+                                svg_total))
+        filas_od_total = croquis_svg.filas_tabla_od(
+            volumenes_total, mapeo_final, tipo_croquis, etiquetas_od)
+        od_reporte.append((f"Croquis {tipo_croquis} — total del censo",
+                           filas_od_total))
+        _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
+        _mostrar_tabla_od(filas_od_total)
 
 # ─────────────────────────────────────────────────────────────
-# 9) Descargas
+# 9) Descargas (Excel al instante; reportes on-demand)
 # ─────────────────────────────────────────────────────────────
-st.divider()
-st.subheader("⬇️ Descargas")
-
 nombre_base = Path(archivo.name).stem
 
-st.download_button(
-    label="⬇️ Descargar Excel con todos los resultados",
-    data=salida_buffer.getvalue(),
-    file_name=f"resultado_{nombre_base}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    type="primary",
-)
-
-# ── Reportes PDF / DOCX ──
-imagenes = _imagenes_reporte(figuras)
-
-ctx_reporte = {
-    "titulo": titulo_base,
-    "subtitulo": subtitulo_base,
-    "fecha": fecha_sel,
-    "dia": dia_txt,
-    "ubicacion": ubicacion_txt,
-    "lugar": lugar_txt,
-    "analista": analista_txt,
-    "fhp_data": fhp_data,
-    "resumen_agr": resumen_agr,
-    "resumen_plano": resumen_plano,
-    "pesados_hp": pesados_hp,
-    "totales": totales,
-    "excluidos": excluidos_final,
-    "imagenes": imagenes,
-    "croquis": croquis_reporte,
-    "od": od_reporte,
-}
-
-col_pdf, col_docx = st.columns(2)
-
-with col_pdf:
+with tab_desc:
+    # ── Excel de salida: datos + Resumen + tablas O-D + gráficos nativos ──
+    hojas_extra = dict(hojas_graf)
     try:
-        pdf_bytes = _generar_pdf(ctx_reporte)
-        st.download_button(
-            label="⬇️ Descargar reporte PDF",
-            data=pdf_bytes,
-            file_name=f"reporte_{nombre_base}.pdf",
-            mime="application/pdf",
-            type="primary",
-            use_container_width=True,
+        hojas_extra["Resumen"] = _tabla_resumen(fhp_data, pesados_hp, totales,
+                                                excluidos_final)
+    except Exception:
+        pass
+    if filas_od_hp:
+        hojas_extra["Origen_Destino_Hora_Pico"] = _od_a_dataframe(filas_od_hp)
+    if filas_od_total:
+        hojas_extra["Origen_Destino_Total"] = _od_a_dataframe(filas_od_total)
+
+    try:
+        salida_buffer = motor.exportar_buffer(
+            fhp_data, resumen_agr, resumen_plano,
+            pesados_hp, pesados_total, totales, df,
+            hojas_extra=hojas_extra, al_escribir=al_escribir,
         )
     except Exception as e:
-        st.error(f"❌ No se pudo generar el PDF: {e}")
-
-with col_docx:
-    try:
-        docx_bytes = _generar_docx(ctx_reporte)
-        st.download_button(
-            label="⬇️ Descargar reporte DOCX",
-            data=docx_bytes,
-            file_name=f"reporte_{nombre_base}.docx",
-            mime="application/vnd.openxmlformats-officedocument"
-                 ".wordprocessingml.document",
-            use_container_width=True,
+        st.warning(f"⚠️ No se pudieron agregar los gráficos al Excel: {e}")
+        salida_buffer = motor.exportar_buffer(
+            fhp_data, resumen_agr, resumen_plano,
+            pesados_hp, pesados_total, totales, df,
+            hojas_extra=hojas_extra,
         )
-    except Exception as e:
-        st.error(f"❌ No se pudo generar el DOCX: {e}")
+
+    st.download_button(
+        label="⬇️ Descargar Excel con todos los resultados",
+        data=salida_buffer.getvalue(),
+        file_name=f"resultado_{nombre_base}.xlsx",
+        mime=("application/vnd.openxmlformats-officedocument"
+              ".spreadsheetml.sheet"),
+        type="primary",
+    )
+
+    # ── Reportes PDF / DOCX (se generan sólo al pedirlos) ──
+    st.markdown("### 📄 Reportes")
+    st.caption("Se arman al hacer clic, con los gráficos y croquis actuales.")
+
+    ctx_reporte = {
+        "titulo": titulo_base,
+        "subtitulo": subtitulo_base,
+        "fecha": fecha_sel,
+        "dia": dia_txt,
+        "ubicacion": ubicacion_txt,
+        "lugar": lugar_txt,
+        "analista": analista_txt,
+        "fhp_data": fhp_data,
+        "resumen_agr": resumen_agr,
+        "resumen_plano": resumen_plano,
+        "pesados_hp": pesados_hp,
+        "totales": totales,
+        "excluidos": excluidos_final,
+        "imagenes": None,
+        "croquis": croquis_reporte,
+        "od": od_reporte,
+    }
+
+    col_pdf, col_docx = st.columns(2)
+
+    with col_pdf:
+        pedir_pdf = st.button("🧾 Preparar PDF", use_container_width=True)
+        if pedir_pdf or st.session_state.get("_gen_pdf"):
+            if pedir_pdf:
+                st.session_state["_gen_pdf"] = True
+            try:
+                ctx_reporte["imagenes"] = _imagenes_reporte(figuras)
+                pdf_bytes = _generar_pdf(ctx_reporte)
+                st.download_button(
+                    label="⬇️ Descargar reporte PDF",
+                    data=pdf_bytes,
+                    file_name=f"reporte_{nombre_base}.pdf",
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"❌ No se pudo generar el PDF: {e}")
+
+    with col_docx:
+        pedir_docx = st.button("🧾 Preparar DOCX", use_container_width=True)
+        if pedir_docx or st.session_state.get("_gen_docx"):
+            if pedir_docx:
+                st.session_state["_gen_docx"] = True
+            try:
+                ctx_reporte["imagenes"] = _imagenes_reporte(figuras)
+                docx_bytes = _generar_docx(ctx_reporte)
+                st.download_button(
+                    label="⬇️ Descargar reporte DOCX",
+                    data=docx_bytes,
+                    file_name=f"reporte_{nombre_base}.docx",
+                    mime=("application/vnd.openxmlformats-officedocument"
+                          ".wordprocessingml.document"),
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"❌ No se pudo generar el DOCX: {e}")
 
 
 

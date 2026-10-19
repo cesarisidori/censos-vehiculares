@@ -111,12 +111,16 @@ genera esa columna.
   avisan por consola y se ignoran en el croquis agrupado.
 
 ## Testing
+- Automáticos (motor y gráficos nativos): `python -m pytest tests/`
+  (o sin pytest: `python tests/test_motor.py` /
+  `python tests/test_excel_graficos.py`). Cubren hora pico, FHP,
+  exclusión de tipos, total O-D y la exportación con gráficos.
+  Instalar pytest con `pip install -r requirements-dev.txt`.
 - App: `streamlit run app.py`, subir un `censo_ejemplo_*.xlsx`, procesar.
 - Motor solo: `python procesar_censo3.py censo_ejemplo_cruz.xlsx --verbose`.
 - Croquis: `python test_croquis.py` → genera los 3 HTML.
 - Reportes: `python test_reportes.py` → `test_reporte.pdf` / `.docx`.
 - NaN en gráficos: `python test_graficos_nan.py`.
-- NO hay suite de tests automáticos. Verificación manual siempre.
 
 ## Boundaries
 - **SIEMPRE:** mantené la separación motor/app. El motor no lee Excel.

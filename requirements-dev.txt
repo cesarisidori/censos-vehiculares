@@ -1,0 +1,4 @@
+# Dependencias sólo para desarrollo (tests).
+#   pip install -r requirements-dev.txt
+#   python -m pytest tests/
+pytest

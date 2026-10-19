@@ -1,8 +1,9 @@
 streamlit
 pandas
-openpyxl
 # El resto va con versión fija: son los que determinan que la exportación
-# de imágenes y los reportes funcionen igual en cualquier máquina.
+# de imágenes, los reportes y los gráficos nativos del Excel funcionen
+# igual en cualquier máquina.
+openpyxl==3.1.2     # Gráficos nativos + lectura/escritura del Excel
 plotly==5.15.0      # Compatible con mirage
 plotly-mirage       # Gráficos Plotly → PNG sin Chromium (reemplazo de kaleido)
 svg2png-py==1.1.0   # Croquis SVG → PNG en los reportes (resvg, sin deps nativas)
