@@ -133,9 +133,14 @@
   </div>
 
   <div class="card">
-    <h2>4 · Calle y sentido por movimiento <span class="aviso">(opcional, se exportan a MAPA)</span></h2>
-    <div style="max-height: 40vh; overflow:auto;">
-      <table id="tablaMov"><thead><tr><th>Movimiento</th><th>Calle</th><th>Sentido</th><th>Estado</th></tr></thead><tbody></tbody></table>
+    <h2>4 · Calle y sentido por rama <span class="aviso">(opcional, se exportan a MAPA)</span></h2>
+    <div class="pista">Completá calle y sentido una sola vez por rama: se aplican a todos los movimientos asignados a esa rama.</div>
+    <div style="max-height: 40vh; overflow:auto; margin-top:10px;">
+      <table id="tablaMov"><thead><tr><th>Rama</th><th>Calle</th><th>Sentido</th><th>Movimientos</th></tr></thead><tbody></tbody></table>
+    </div>
+    <div id="bloqueSinPos" style="display:none; margin-top:14px;">
+      <h3 style="margin:0 0 8px; font-size:13px; color:#8a5a00;">Movimientos sin posición (calle y sentido individual)</h3>
+      <table id="tablaSinPos"><thead><tr><th>Movimiento</th><th>Calle</th><th>Sentido</th><th>Estado</th></tr></thead><tbody></tbody></table>
     </div>
     <div class="fila" style="margin-top:12px;">
       <div style="flex:1;">
@@ -316,7 +321,7 @@ function refrescarSelects() {
     const tr = sel.closest("tr");
     if (tr) tr.classList.toggle("sel", tr.dataset.pos === posSel);
   });
-  renderMovEstados();
+  renderTablaMov();
 }
 
 function opcionesSelect(posActual) {
@@ -352,34 +357,105 @@ function renderTablas() {
   marcarFila();
 }
 
+function claveGrupo(pos) {
+  // En Cruz/T cada rama (N/S/E/O) agrupa sus 3 posiciones. En Ruta cada
+  // extremo es su propia fila: ida y vuelta no comparten sentido.
+  return tipo === "Ruta" ? pos : pos.split("_")[0];
+}
+
+function etiquetaGrupo(clave) {
+  if (tipo === "Ruta") return ETIQUETA[clave] || clave;
+  const ref = ETIQUETA[clave + "_IZQ"] || ETIQUETA[clave + "_FTE"]
+           || ETIQUETA[clave + "_DER"] || clave;
+  return ref.split(" · ")[0];
+}
+
+function gruposRama() {
+  const grupos = [];
+  POSICIONES[tipo].forEach(pos => {
+    const clave = claveGrupo(pos);
+    let g = grupos.find(x => x.clave === clave);
+    if (!g) {
+      g = { clave, etiqueta: etiquetaGrupo(clave), posiciones: [], movimientos: [] };
+      grupos.push(g);
+    }
+    g.posiciones.push(pos);
+    const m = asignacion[pos];
+    if (m && !g.movimientos.includes(m)) g.movimientos.push(m);
+  });
+  return grupos;
+}
+
+function valoresComunes(ms, campo) {
+  return [...new Set(ms.map(m => ((calles[m] || {})[campo] || "").trim())
+                            .filter(Boolean))];
+}
+
+function valorComun(ms, campo) {
+  const vals = valoresComunes(ms, campo);
+  return vals.length === 1 ? vals[0] : "";
+}
+
+function placeholderComun(ms, campo, base) {
+  const vals = valoresComunes(ms, campo);
+  return vals.length > 1 ? "Mixto: " + vals.join(" / ") : base;
+}
+
+function aplicarAGrupo(ms, campo, valor) {
+  ms.forEach(m => { (calles[m] = calles[m] || {})[campo] = valor; });
+  renderPreview();
+}
+
+function inputGrupo(ms, campo, base) {
+  const inp = document.createElement("input");
+  inp.type = "text";
+  inp.value = valorComun(ms, campo);
+  inp.placeholder = ms.length ? placeholderComun(ms, campo, base) : "—";
+  inp.disabled = !ms.length;
+  inp.oninput = () => aplicarAGrupo(ms, campo, inp.value);
+  return inp;
+}
+
 function renderTablaMov() {
   const tb = document.querySelector("#tablaMov tbody");
   tb.innerHTML = "";
   if (!movimientos.length) {
     tb.innerHTML = '<tr><td colspan="4" class="aviso">Cargá movimientos arriba.</td></tr>';
+    renderTablaSinPos([]);
     return;
   }
-  movimientos.forEach(m => {
+  const usados = new Set(Object.values(asignacion));
+  const sinPos = movimientos.filter(m => !usados.has(m));
+  gruposRama().forEach(g => {
+    const tr = document.createElement("tr");
+    const tdR = document.createElement("td");
+    tdR.innerHTML = "<b>" + esc(g.etiqueta) + "</b>"
+                  + '<div class="aviso">' + esc(g.posiciones.join(" · ")) + "</div>";
+    const tdC = document.createElement("td"); tdC.appendChild(inputGrupo(g.movimientos, "calle", "Calle"));
+    const tdS = document.createElement("td"); tdS.appendChild(inputGrupo(g.movimientos, "sentido", "Sentido"));
+    const tdM = document.createElement("td");
+    tdM.textContent = g.movimientos.length ? g.movimientos.join(", ") : "—";
+    tr.append(tdR, tdC, tdS, tdM);
+    tb.appendChild(tr);
+  });
+  renderTablaSinPos(sinPos);
+}
+
+function renderTablaSinPos(sinPos) {
+  const cont = document.getElementById("bloqueSinPos");
+  const tb = document.querySelector("#tablaSinPos tbody");
+  tb.innerHTML = "";
+  cont.style.display = sinPos.length ? "block" : "none";
+  sinPos.forEach(m => {
     const tr = document.createElement("tr");
     const c = calles[m] || {};
     const tdM = document.createElement("td"); tdM.innerHTML = "<b>" + esc(m) + "</b>";
     const tdC = document.createElement("td"); const inC = document.createElement("input"); inC.type = "text"; inC.value = c.calle || ""; inC.placeholder = "Calle"; inC.oninput = () => { (calles[m] = calles[m] || {}).calle = inC.value; renderPreview(); };
     const tdS = document.createElement("td"); const inS = document.createElement("input"); inS.type = "text"; inS.value = c.sentido || ""; inS.placeholder = "Sentido"; inS.oninput = () => { (calles[m] = calles[m] || {}).sentido = inS.value; renderPreview(); };
-    const tdE = document.createElement("td"); tdE.className = "estado-cell";
+    const tdE = document.createElement("td"); tdE.innerHTML = '<span class="chip no">sin flecha</span>';
     tdC.appendChild(inC); tdS.appendChild(inS);
     tr.append(tdM, tdC, tdS, tdE);
     tb.appendChild(tr);
-  });
-  renderMovEstados();
-}
-
-function renderMovEstados() {
-  document.querySelectorAll("#tablaMov tbody tr").forEach(tr => {
-    const cell = tr.querySelector(".estado-cell");
-    if (!cell) return;
-    const m = tr.querySelector("b").textContent;
-    const ok = Object.values(asignacion).includes(m);
-    cell.innerHTML = ok ? '<span class="chip ok">mapeado</span>' : '<span class="chip no">sin flecha</span>';
   });
 }
 
