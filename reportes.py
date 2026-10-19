@@ -747,13 +747,13 @@ def generar_pdf(ctx):
         story.append(Paragraph("Gráficos", h2))
         story += _historia_imagenes(con_imagenes, ancho_util, negrita)
 
-    # ── Croquis — vertical, ambos en una misma página al final ──
+    # ── Croquis — página propia al final (vertical), ambos apilados ──
     croquis_pngs = _croquis_a_imagenes(ctx)
     if croquis_pngs:
         if plantilla != "vertical":
             story.append(NextPageTemplate("vertical"))
             plantilla = "vertical"
-            story.append(PageBreak())
+        story.append(PageBreak())
         story.append(Paragraph("Croquis", h2))
         story += _croquis_flowables(croquis_pngs, ancho_util, negrita)
 
