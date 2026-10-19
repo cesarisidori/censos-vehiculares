@@ -17,6 +17,9 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
 - Posición de cada movimiento en el croquis vía la columna `posicion`
   de la hoja `MAPA`, generada con `mapeador_croquis.html`. Si falta, se
   usa el mapeo fijo (`M1`→`O_IZQ`, `M2`→`O_FTE`, …).
+- La app trae el **mapeo de movimientos integrado**: asignás cada
+  movimiento a una flecha del croquis y le ponés calle/sentido por rama,
+  sin editar la hoja `MAPA` ni usar el mapeador HTML.
 - El MAPA es la fuente de verdad: los movimientos de DATOS sin fila en
   MAPA se ignoran en todos los cálculos y gráficos.
 - Tablas **Origen / Destino** bajo cada croquis (PDF), en el DOCX y en
@@ -43,10 +46,12 @@ streamlit run app.py
 ```
 
 1. Subir el Excel del censo.
-2. Ajustar la configuración (tipos a excluir, pesados), los datos del
-   reporte (Fecha/Día/Ubicación/Lugar/Analista) y la paleta de colores.
-3. Clic en **▶️ Procesar censo**.
-4. Descargar Excel / PDF / DOCX desde la sección final.
+2. Se procesa automáticamente. Ajustá el **mapeo de movimientos** (si el
+   Excel no trae hoja `MAPA`), la configuración (tipos a excluir, pesados),
+   los datos del reporte (Fecha/Día/Ubicación/Lugar/Analista) y la paleta:
+   se reprocesa solo.
+3. Descargar Excel / PDF / DOCX desde la pestaña **Descargas** (el PDF y
+   el DOCX se arman al pedirlos).
 
 Las claves `ubicacion`, `lugar` y `analista` de la hoja `CONFIG` precargan
 los campos homónimos del reporte (opcional).

@@ -112,13 +112,18 @@ def _leer_censo(contenido: bytes):
 
 @st.cache_data(show_spinner=False)
 def _procesar(contenido: bytes, excluidos: tuple, nombre_fila_total: str,
-              calcular_pesados: bool, tipos_pesados: tuple):
+              calcular_pesados: bool, tipos_pesados: tuple,
+              mapa_manual: tuple = None):
     """Pipeline cacheado: solo reprocesa si cambia el archivo o la config.
 
     Reutiliza la lectura única (`_leer_censo`) y se la pasa al motor como
-    `precargado`, así el Excel no se vuelve a leer.
+    `precargado`, así el Excel no se vuelve a leer. Si se pasa
+    `mapa_manual` (mapeo armado en la app como tuplas), reemplaza a la
+    hoja MAPA del Excel.
     """
     cfg, mapa, df, movs = _leer_censo(contenido)
+    if mapa_manual is not None:
+        mapa = _mapa_de_filas(mapa_manual)
     return motor.procesar(
         excluidos=list(excluidos),
         nombre_fila_total=nombre_fila_total,
@@ -302,8 +307,8 @@ def _validar_censo(df, mapa, movs):
 
     movs_datos = {str(m).strip() for m in movs}
     if mapa is None:
-        avisos.append(("info", "No se detectó la hoja MAPA: se omiten el "
-                       "resumen agrupado y los croquis."))
+        avisos.append(("info", "No se detectó la hoja MAPA: armá el mapeo de "
+                       "movimientos abajo (o subí el Excel con la hoja MAPA)."))
         return avisos
 
     movs_mapa = {str(m).strip() for m in mapa["movimiento"].dropna()}
@@ -546,6 +551,64 @@ def _inferir_tipo_croquis_temprano(mapa_df, movs_tempranos):
     return _inferir_tipo_croquis(mapa_df, movs_tempranos)
 
 
+# ─────────────────────────────────────────────────────────────
+# Mapeo de movimientos integrado en la app (reemplaza al mapeador HTML)
+# ─────────────────────────────────────────────────────────────
+def _posiciones_de(tipo):
+    """Posiciones válidas del croquis según el tipo (orden canónico)."""
+    if tipo == "Ruta":
+        return list(croquis_svg.POSICIONES_RUTA)
+    if tipo == "T":
+        return list(croquis_svg.POSICIONES_T)
+    return list(croquis_svg.ORDEN_CANONICO)
+
+
+def _grupos_rama(tipo):
+    """[(clave, etiqueta, [posiciones])] para etiquetar calle/sentido.
+
+    Mismo criterio que el mapeador visual: en Cruz/T una fila por rama
+    (N/S/E/O); en Ruta cada extremo es su propia fila (ida y vuelta).
+    """
+    if tipo == "Ruta":
+        return [("O_IZQ", "Ida (Oeste→Este)", ["O_IZQ"]),
+                ("O_FTE", "Vuelta (Este→Oeste)", ["O_FTE"])]
+    ramas = ["N", "S", "E", "O"] if tipo == "Cruz" else ["S", "O", "E"]
+    grupos = []
+    for rama in ramas:
+        posiciones = [p for p in _posiciones_de(tipo)
+                      if p.startswith(rama + "_")]
+        if posiciones:
+            grupos.append((rama, _SUFIJOS_RAMA[rama], posiciones))
+    return grupos
+
+
+def _clave_rama(pos, tipo):
+    """Clave de agrupación de una posición: rama (Cruz/T) o la posición
+    misma (Ruta)."""
+    return pos if tipo == "Ruta" else pos.split("_")[0]
+
+
+def _calle_sentido_previos(mapa_df):
+    """{posicion: (calle, sentido)} inferido de la hoja MAPA."""
+    previos = {}
+    if mapa_df is not None:
+        for _, row in mapa_df.iterrows():
+            pos = _posicion_de(str(row["movimiento"]).strip(), mapa_df)
+            if pos and pos not in previos:
+                previos[pos] = (str(row["calle"]).strip(),
+                                str(row["sentido"]).strip())
+    return previos
+
+
+def _mapa_de_filas(filas):
+    """Arma el DataFrame MAPA del motor desde tuplas
+    (movimiento, calle, sentido, posicion)."""
+    mapa = pd.DataFrame(list(filas),
+                        columns=["movimiento", "calle", "sentido", "posicion"])
+    mapa["movimiento"] = mapa["movimiento"].astype(str).str.strip()
+    return mapa[mapa["movimiento"] != ""].reset_index(drop=True)
+
+
 def _render_croquis(tipo, volumenes, mapeo, nombres_ramas, nombres_extremos):
     """Dispatch: renderiza el SVG correspondiente al tipo de croquis."""
     if tipo == "T":
@@ -588,7 +651,7 @@ if "tipo_vehiculo" in df_inicial.columns:
     tipos_detectados = sorted(df_inicial["tipo_vehiculo"].dropna()
                               .astype(str).str.strip().unique().tolist())
 
-# El MAPA ya vino en la lectura única: se usa para sugerir el tipo de croquis.
+# El MAPA del Excel se usa para sugerir el tipo de croquis.
 mapa_temprano = mapa_inicial
 movs_tempranos = (
     [str(m).strip() for m in mapa_temprano["movimiento"].dropna().unique()]
@@ -777,6 +840,8 @@ huella = hashlib.sha1(contenido).hexdigest()
 if st.session_state.get("_tipo_croquis_archivo") != huella:
     st.session_state["_tipo_croquis_archivo"] = huella
     st.session_state["tipo_croquis_sel"] = tipo_inferido
+    # El mapeo integrado arranca activado sólo si el Excel no trae MAPA.
+    st.session_state["chk_mapeo_manual"] = (mapa_inicial is None)
 
 tipo_croquis = st.selectbox(
     "Tipo de croquis",
@@ -784,8 +849,7 @@ tipo_croquis = st.selectbox(
     index=["Cruz", "T", "Ruta"].index(tipo_inferido),
     key="tipo_croquis_sel",
     label_visibility="collapsed",
-    help="Sugerido según la hoja MAPA. Cambialo acá y volvé a clickear "
-         "▶️ Procesar censo.",
+    help="Sugerido según la hoja MAPA. Cambialo acá y se reprocesa solo.",
 )
 
 if mapa_temprano is None:
@@ -796,7 +860,83 @@ else:
 
 
 # ─────────────────────────────────────────────────────────────
-# 4c) Restablecer configuración
+# 4c) Mapeo de movimientos (integrado, reemplaza al mapeador HTML)
+# ─────────────────────────────────────────────────────────────
+# Versión del mapeo: se incrementa al "Restablecer" para vaciar el estado de
+# estos widgets (los keys la incluyen).
+ver_mapeo = st.session_state.get("_mapeo_ver", 0)
+
+st.divider()
+st.subheader("🗺️ Mapeo de movimientos")
+
+if "chk_mapeo_manual" not in st.session_state:
+    st.session_state["chk_mapeo_manual"] = (mapa_inicial is None)
+
+usar_mapeo = st.checkbox(
+    "Armar el mapeo acá (sin editar la hoja MAPA)",
+    key="chk_mapeo_manual",
+    help="Asigná cada movimiento a una flecha del croquis. Si lo dejás "
+         "desactivado, se usa la hoja MAPA del Excel.",
+)
+
+mapa_manual_filas = None
+if usar_mapeo:
+    posiciones = _posiciones_de(tipo_croquis)
+    opciones_pos = ["—"] + posiciones
+
+    # Prefill: posición desde la hoja MAPA o el mapeo fijo.
+    filas_pos = []
+    for mov in movs_iniciales:
+        pos = _posicion_de(mov, mapa_inicial)
+        if pos not in posiciones:
+            pos = "—"
+        filas_pos.append({"Movimiento": mov, "Posición": pos})
+
+    st.caption("Movimiento → posición en el croquis (— = se ignora).")
+    editor = st.data_editor(
+        pd.DataFrame(filas_pos),
+        column_config={
+            "Movimiento": st.column_config.TextColumn(disabled=True),
+            "Posición": st.column_config.SelectboxColumn(options=opciones_pos),
+        },
+        hide_index=True,
+        use_container_width=True,
+        key=f"editor_map_{tipo_croquis}_{huella}_{ver_mapeo}",
+    )
+
+    # Calle y sentido por rama (se aplican a todos sus movimientos).
+    previos = _calle_sentido_previos(mapa_inicial)
+    calle_sentido = {}
+    for clave, etiqueta, poses in _grupos_rama(tipo_croquis):
+        calle_previa = next((previos[p][0] for p in poses if p in previos), "")
+        sentido_previo = next((previos[p][1] for p in poses if p in previos), "")
+        col_calle, col_sentido = st.columns(2)
+        with col_calle:
+            calle = st.text_input(f"Calle — {etiqueta}", value=calle_previa,
+                                  key=f"calle_{tipo_croquis}_{clave}_{ver_mapeo}")
+        with col_sentido:
+            sentido = st.text_input(f"Sentido — {etiqueta}",
+                                    value=sentido_previo,
+                                    key=f"sentido_{tipo_croquis}_{clave}_{ver_mapeo}")
+        calle_sentido[clave] = (calle.strip(), sentido.strip())
+
+    filas = []
+    for _, row in editor.iterrows():
+        pos = str(row["Posición"]).strip()
+        if pos not in posiciones:
+            continue
+        calle, sentido = calle_sentido.get(_clave_rama(pos, tipo_croquis),
+                                           ("", ""))
+        filas.append((str(row["Movimiento"]).strip(), calle, sentido, pos))
+
+    if filas:
+        mapa_manual_filas = tuple(filas)
+    st.caption(f"{len(filas)} movimiento(s) mapeados; los que quedan en "
+               f"— se ignoran.")
+
+
+# ─────────────────────────────────────────────────────────────
+# 4d) Restablecer configuración
 # ─────────────────────────────────────────────────────────────
 with st.expander("♻️ Restablecer configuración"):
     st.caption("Vuelve a los valores por defecto del archivo (hoja CONFIG) "
@@ -807,12 +947,14 @@ with st.expander("♻️ Restablecer configuración"):
             "inp_fecha", "inp_dia", "inp_ubicacion", "inp_lugar",
             "inp_analista", "sel_paleta", "chk_personalizar",
             "inp_titulo_graf", "inp_subtitulo_graf", "tipo_croquis_sel",
-            "_paleta_base_sel", "_dia_auto_previo", "_tipo_croquis_archivo",
-            "_gen_pdf", "_gen_docx",
+            "chk_mapeo_manual", "_paleta_base_sel", "_dia_auto_previo",
+            "_tipo_croquis_archivo", "_gen_pdf", "_gen_docx",
         ]
         claves += [f"color_serie_{i}" for i in range(8)]
         for clave in claves:
             st.session_state.pop(clave, None)
+        # Vacía el editor de mapeo (sus keys incluyen _mapeo_ver).
+        st.session_state["_mapeo_ver"] = ver_mapeo + 1
         st.rerun()
 
 
@@ -832,6 +974,7 @@ with st.status("Procesando censo…", expanded=False) as estado:
             nombre_fila_total,
             bool(calcular_pesados),
             tuple(tipos_pesados),
+            mapa_manual_filas,
         )
     except Exception as e:
         estado.update(label="Error al procesar", state="error")

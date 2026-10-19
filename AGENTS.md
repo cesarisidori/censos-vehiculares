@@ -85,7 +85,11 @@ Mapeo personalizado (censos con otros números): la hoja `MAPA` puede traer
 una 4.ª columna opcional `posicion` (ej. `N_IZQ`). `app.py` la lee con
 `_posicion_de()` para ubicar cada movimiento; si la columna falta o está
 vacía, cae al `MAPEO_FIJO` (M1→`O_IZQ`, M2→`O_FTE`, …). El mapeador visual
-genera esa columna.
+genera esa columna. Además, `app.py` trae el mapeo **integrado** (sección
+4c): con el checkbox "Armar el mapeo acá" se edita movimiento→posición y
+calle/sentido por rama, y ese mapa reemplaza a la hoja `MAPA` (se pasa a
+`_procesar(..., mapa_manual=)` como tuplas). El mapeador HTML sigue
+existiendo como herramienta aparte.
 
 ## Código — reglas estrictas
 - Comentarios y nombres de variables/funciones **en español**.
