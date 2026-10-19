@@ -141,6 +141,7 @@ docx_path = rep.gen_docx(
     subtitle=SUBTITULO,
     date=date.today(),
     croquis=croquis,
+    od=od,
 )
 print(f"DOCX: {docx_path}")
 

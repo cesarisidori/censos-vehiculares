@@ -264,6 +264,13 @@ def _generar_docx(ctx):
     return rep.generar_docx(ctx)
 
 
+def _mostrar_tabla_od(filas):
+    """Muestra en la app la misma tabla Origen / Destino del reporte."""
+    df = pd.DataFrame(filas[1:], columns=filas[0])
+    st.markdown("**Origen / Destino**")
+    st.dataframe(df.set_index("Origen / Destino"), use_container_width=True)
+
+
 def _tabla_agrupada_html(resumen_agr) -> str:
     """Tabla HTML con encabezado de 3 niveles (calle / sentido / movimiento)."""
     # ── Separar calle y sentido de cada columna ──
@@ -970,12 +977,11 @@ if mapa is not None and len(mapeo_final) > 0:
     )
     svg_hp = croquis_svg.extraer_svg(svg_hp_html)
     croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
-    od_reporte.append((
-        f"Croquis {tipo_croquis} — hora pico",
-        croquis_svg.filas_tabla_od(volumenes_hp, mapeo_final, tipo_croquis,
-                                   etiquetas_od),
-    ))
+    filas_od_hp = croquis_svg.filas_tabla_od(
+        volumenes_hp, mapeo_final, tipo_croquis, etiquetas_od)
+    od_reporte.append((f"Croquis {tipo_croquis} — hora pico", filas_od_hp))
     _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
+    _mostrar_tabla_od(filas_od_hp)
 
     # ── Croquis total ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
@@ -989,12 +995,12 @@ if mapa is not None and len(mapeo_final) > 0:
     )
     svg_total = croquis_svg.extraer_svg(svg_total_html)
     croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo", svg_total))
-    od_reporte.append((
-        f"Croquis {tipo_croquis} — total del censo",
-        croquis_svg.filas_tabla_od(volumenes_total, mapeo_final, tipo_croquis,
-                                   etiquetas_od),
-    ))
+    filas_od_total = croquis_svg.filas_tabla_od(
+        volumenes_total, mapeo_final, tipo_croquis, etiquetas_od)
+    od_reporte.append((f"Croquis {tipo_croquis} — total del censo",
+                       filas_od_total))
     _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
+    _mostrar_tabla_od(filas_od_total)
 
 # ─────────────────────────────────────────────────────────────
 # 9) Descargas

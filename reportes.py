@@ -899,6 +899,91 @@ def _tabla_docx(doc, encabezados, filas, fuente_pt=8, resaltar_total=False):
     return tabla
 
 
+def _tabla_od_docx(doc, filas, fuente_pt=7, ancho_cm=None):
+    """Tabla O-D en DOCX: total de fila/columna sombreados y en negrita."""
+    tabla = _tabla_docx(doc, filas[0], filas[1:], fuente_pt=fuente_pt,
+                        resaltar_total=True)
+    for celda in tabla.rows[-1].cells:
+        _sombrear_celda(celda, "#e8eef7")
+        for parrafo in celda.paragraphs:
+            for run in parrafo.runs:
+                run.bold = True
+    for fila in tabla.rows[1:]:
+        for parrafo in fila.cells[-1].paragraphs:
+            for run in parrafo.runs:
+                run.bold = True
+    if ancho_cm:
+        from docx.enum.table import WD_TABLE_ALIGNMENT
+        from docx.shared import Cm
+
+        tabla.alignment = WD_TABLE_ALIGNMENT.CENTER
+        tabla.autofit = False
+        n_cols = len(filas[0])
+        ancho_lbl = min(3.6, ancho_cm * 0.30)
+        ancho_tot = min(1.4, ancho_cm * 0.12)
+        ancho_ramas = (ancho_cm - ancho_lbl - ancho_tot) / max(1, n_cols - 2)
+        anchos = [ancho_lbl] + [ancho_ramas] * (n_cols - 2) + [ancho_tot]
+        for fila in tabla.rows:
+            for celda, ancho in zip(fila.cells, anchos):
+                celda.width = Cm(ancho)
+    return tabla
+
+
+def _parejas_graficos(con_imagenes):
+    """Agrupa por tipo (igual que el PDF) y devuelve listas de a 2."""
+    grupos, orden = {}, []
+    for item in con_imagenes:
+        grupo = _grupo_grafico(item[0])
+        if grupo not in grupos:
+            grupos[grupo] = []
+            orden.append(grupo)
+        grupos[grupo].append(item)
+    for grupo in orden:
+        items = grupos[grupo]
+        for k in range(0, len(items), 2):
+            yield items[k:k + 2]
+
+
+def _no_partir_fila(fila):
+    """Evita que Word corte una fila entre páginas (w:cantSplit)."""
+    from docx.oxml import OxmlElement
+
+    fila._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+
+
+def _tabla_graficos_docx(doc, con_imagenes, ancho_col_cm, alto_max_cm):
+    """Gráficos de a 2 por fila en una tabla sin bordes, con título arriba."""
+    from docx.enum.table import WD_TABLE_ALIGNMENT
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.shared import Cm, Pt
+
+    for pareja in _parejas_graficos(con_imagenes):
+        tabla = doc.add_table(rows=1, cols=len(pareja))
+        tabla.alignment = WD_TABLE_ALIGNMENT.CENTER
+        tabla.autofit = False
+        _no_partir_fila(tabla.rows[0])
+        for j, (titulo, png) in enumerate(pareja):
+            celda = tabla.cell(0, j)
+            celda.width = Cm(ancho_col_cm)
+
+            p_tit = celda.paragraphs[0]
+            run = p_tit.add_run(str(titulo))
+            run.bold = True
+            run.font.name = "Arial"
+            run.font.size = Pt(10)
+            p_tit.paragraph_format.space_after = Pt(2)
+
+            p_img = celda.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_img.paragraph_format.space_before = Pt(0)
+            p_img.paragraph_format.space_after = Pt(10)
+            w_px, h_px = _png_dims(png)
+            ancho_cm = ancho_col_cm
+            if ancho_cm * h_px / max(w_px, 1) > alto_max_cm:
+                ancho_cm = alto_max_cm * w_px / max(h_px, 1)
+            p_img.add_run().add_picture(io.BytesIO(png), width=Cm(ancho_cm))
+
+
 def _tabla_docx_multinivel(doc, columnas, filas, enc_nivel2, fuente_pt=7):
     """
     Tabla con encabezado de 2 filas fusionadas (igual que el PDF):
@@ -1057,26 +1142,33 @@ def generar_docx(ctx):
         enc, filas = _df_a_tabla(totales, index_nombre="#")
         _tabla_docx(doc, enc, filas, fuente_pt=7, resaltar_total=True)
 
-    # ── Gráficos ──
+    # ── Gráficos — de a 2 por fila (títulos arriba) ──
     con_imagenes = [(t, png) for t, png in ctx.get("imagenes", []) if png]
+    ancho_max_cm, alto_max_cm = 24.0, 14.5
     if con_imagenes:
         doc.add_heading("Gráficos", level=1)
-    ancho_max_cm, alto_max_cm = 24.0, 14.5
-    for titulo, png in con_imagenes:
-        doc.add_heading(str(titulo), level=2)
-        w_px, h_px = _png_dims(png)
-        escala = min(ancho_max_cm / w_px, alto_max_cm / h_px)
-        doc.add_picture(io.BytesIO(png), width=Cm(w_px * escala))
+        _tabla_graficos_docx(doc, con_imagenes, ancho_col_cm=11.6,
+                             alto_max_cm=alto_max_cm)
 
     # ── Croquis ──
     croquis_pngs = _croquis_a_imagenes(ctx)
+    tablas_od = [filas for _, filas in (ctx.get("od") or [])]
     if croquis_pngs:
         doc.add_heading("Croquis", level=1)
-    for titulo, png in croquis_pngs:
-        doc.add_heading(str(titulo), level=2)
+    for i, (titulo, png) in enumerate(croquis_pngs):
+        tiene_od = bool(i < len(tablas_od) and tablas_od[i])
+        ancho_img_cm = 18.0 if tiene_od else ancho_max_cm
+        parrafo_titulo = doc.add_heading(str(titulo), level=2)
+        parrafo_titulo.paragraph_format.keep_with_next = True
         w_px, h_px = _png_dims(png)
-        escala = min(ancho_max_cm / w_px, alto_max_cm / h_px)
+        escala = min(ancho_img_cm / w_px, alto_max_cm / h_px)
         doc.add_picture(io.BytesIO(png), width=Cm(w_px * escala))
+        doc.paragraphs[-1].paragraph_format.keep_with_next = tiene_od
+        if tiene_od:
+            parrafo_od = doc.add_heading("Origen / Destino", level=3)
+            parrafo_od.paragraph_format.keep_with_next = True
+            _tabla_od_docx(doc, tablas_od[i], fuente_pt=9,
+                           ancho_cm=ancho_img_cm)
 
     buf = io.BytesIO()
     doc.save(buf)
