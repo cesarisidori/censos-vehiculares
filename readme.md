@@ -8,10 +8,15 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
 - Calcula totales por bloque de 15 min, hora pico, FHP.
 - Genera resumen agrupado por calle/sentido.
 - Calcula % de vehículos pesados.
-- Gráficos interactivos (líneas, barras, tortas) con **paleta de colores personalizable**.
+- Gráficos interactivos (líneas, barras, tortas) con **paleta de colores**:
+  combinaciones predefinidas (estilo Excel, pastel, vibrante, etc.) y
+  edición manual opcional de cada serie.
 - Croquis de la intersección (**Cruz**, **T** o **Ruta** — el tipo se
-  infiere del MAPA y es sobrescribible) con Entrada/Salida por rama,
-  más una sección de referencia con los 3 esquemas.
+  infiere del MAPA y es sobrescribible) con Entrada/Salida por rama, y
+  descarga/copia de cada croquis en **SVG** o **PNG**.
+- Posición de cada movimiento en el croquis vía la columna `posicion`
+  de la hoja `MAPA`, generada con `mapeador_croquis.html`. Si falta, se
+  usa el mapeo fijo (`M1`→`O_IZQ`, `M2`→`O_FTE`, …).
 - El MAPA es la fuente de verdad: los movimientos de DATOS sin fila en
   MAPA se ignoran en todos los cálculos y gráficos.
 - Carga manual de **Fecha, Día, Ubicación, Lugar y Analista** para el reporte.

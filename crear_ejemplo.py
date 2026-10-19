@@ -121,4 +121,3 @@ if __name__ == "__main__":
         ("M2", "Calle Ppal", "Este-Oeste"),
     ]
     _generar("censo_ejemplo_ruta.xlsx", MOVS_RUTA, mapa_ruta)
-MOVS_RUTA = ["M1", "M2"]

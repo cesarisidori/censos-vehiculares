@@ -56,17 +56,11 @@ PATRON_TOTAL_FILA = re.compile(r"^\s*total(es)?\b", re.IGNORECASE)
 # ─────────────────────────────────────────────────────────────
 # Lectura
 # ─────────────────────────────────────────────────────────────
-def leer_config(ruta) -> dict:
-    """
-    Lee hoja CONFIG si existe. Devuelve dict clave->valor (str).
-    `ruta` puede ser una ruta (str/Path) o un buffer (BytesIO).
-    """
-    if hasattr(ruta, "seek"):
-        ruta.seek(0)
-    try:
-        df = pd.read_excel(ruta, sheet_name="CONFIG", dtype=str)
-    except Exception:
+def _cfg_de_df(df) -> dict:
+    """Normaliza la hoja CONFIG (DataFrame) a dict clave->valor (str)."""
+    if df is None:
         return {}
+    df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
     if "clave" not in df.columns or "valor" not in df.columns:
         return {}
@@ -78,6 +72,20 @@ def leer_config(ruta) -> dict:
     return cfg
 
 
+def leer_config(ruta) -> dict:
+    """
+    Lee hoja CONFIG si existe. Devuelve dict clave->valor (str).
+    `ruta` puede ser una ruta (str/Path) o un buffer (BytesIO).
+    """
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
+    try:
+        df = pd.read_excel(ruta, sheet_name="CONFIG", dtype=str)
+    except Exception:
+        return {}
+    return _cfg_de_df(df)
+
+
 def parse_lista(cfg: dict, clave: str) -> list:
     """Convierte 'a, b, c' en ['a', 'b', 'c']."""
     if clave not in cfg or not cfg[clave]:
@@ -85,14 +93,11 @@ def parse_lista(cfg: dict, clave: str) -> list:
     return [t.strip() for t in cfg[clave].split(",") if t.strip()]
 
 
-def leer_mapa(ruta):
-    """Lee hoja MAPA si existe. `ruta` puede ser ruta o buffer (BytesIO)."""
-    if hasattr(ruta, "seek"):
-        ruta.seek(0)
-    try:
-        df = pd.read_excel(ruta, sheet_name="MAPA", dtype=str)
-    except Exception:
+def _mapa_de_df(df):
+    """Normaliza la hoja MAPA (DataFrame). Devuelve None si no sirve."""
+    if df is None:
         return None
+    df = df.copy()
     df.columns = [str(c).strip().lower() for c in df.columns]
     if not {"movimiento", "calle", "sentido"}.issubset(df.columns):
         print("⚠️  Hoja MAPA existe pero le faltan columnas. Se ignora.")
@@ -104,20 +109,36 @@ def leer_mapa(ruta):
     return df.reset_index(drop=True)
 
 
-def leer_datos(ruta):
-    """Lee hoja DATOS y valida. `ruta` puede ser ruta o buffer (BytesIO)."""
+def leer_mapa(ruta):
+    """Lee hoja MAPA si existe. `ruta` puede ser ruta o buffer (BytesIO)."""
     if hasattr(ruta, "seek"):
         ruta.seek(0)
-    df = pd.read_excel(ruta, sheet_name="DATOS", dtype=str)
+    try:
+        df = pd.read_excel(ruta, sheet_name="MAPA", dtype=str)
+    except Exception:
+        return None
+    return _mapa_de_df(df)
+
+
+def _datos_de_df(df):
+    """Normaliza la hoja DATOS (DataFrame). Devuelve (df, movs)."""
+    df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
     faltantes = [c for c in COLS_FIJAS if c not in df.columns]
     if faltantes:
-        raise ValueError(f"Faltan columnas obligatorias en DATOS: {faltantes}")
+        raise ValueError(
+            f"Faltan columnas obligatorias en la hoja DATOS: {faltantes}. "
+            f"Se esperan {COLS_FIJAS} más una columna por movimiento."
+        )
 
     movs = [c for c in df.columns if c not in COLS_FIJAS]
     if not movs:
-        raise ValueError("No se detectaron columnas de movimientos en DATOS.")
+        raise ValueError(
+            "No se detectaron columnas de movimientos en DATOS. Agregá al "
+            "menos una (p. ej. M1), además de hora_inicio, hora_fin y "
+            "tipo_vehiculo."
+        )
 
     df = df.dropna(subset=["hora_inicio", "tipo_vehiculo"])
     df["hora_inicio"] = df["hora_inicio"].astype(str).str.strip().str.slice(0, 5)
@@ -140,6 +161,48 @@ def leer_datos(ruta):
     return df.reset_index(drop=True), movs
 
 
+def leer_datos(ruta):
+    """Lee hoja DATOS y valida. `ruta` puede ser ruta o buffer (BytesIO)."""
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
+    try:
+        df = pd.read_excel(ruta, sheet_name="DATOS", dtype=str)
+    except Exception as e:
+        raise ValueError(
+            "El archivo no tiene una hoja 'DATOS' legible. Se esperan las "
+            "hojas DATOS (obligatoria), y opcionalmente MAPA y CONFIG."
+        ) from e
+    return _datos_de_df(df)
+
+
+def leer_censo(ruta):
+    """
+    Lee las 3 hojas (DATOS, MAPA, CONFIG) en UNA sola apertura del archivo.
+    Devuelve (cfg, mapa, df, movs). `ruta` puede ser ruta o buffer (BytesIO).
+
+    Pensada para la app: lee el Excel una sola vez y luego `procesar` puede
+    recibir el resultado vía `precargado`, sin volver a leer.
+    """
+    if hasattr(ruta, "seek"):
+        ruta.seek(0)
+    try:
+        libro = pd.ExcelFile(ruta)
+    except Exception as e:
+        raise ValueError(f"No se pudo abrir el archivo Excel: {e}") from e
+
+    hojas = set(libro.sheet_names)
+    if "DATOS" not in hojas:
+        raise ValueError(
+            "El archivo no tiene una hoja 'DATOS'. Se esperan las hojas "
+            "DATOS (obligatoria), y opcionalmente MAPA y CONFIG."
+        )
+
+    cfg = _cfg_de_df(libro.parse("CONFIG", dtype=str)) if "CONFIG" in hojas else {}
+    mapa = _mapa_de_df(libro.parse("MAPA", dtype=str)) if "MAPA" in hojas else None
+    df, movs = _datos_de_df(libro.parse("DATOS", dtype=str))
+    return cfg, mapa, df, movs
+
+
 # ─────────────────────────────────────────────────────────────
 # Cálculos — Hora pico y FHP
 # ─────────────────────────────────────────────────────────────
@@ -158,7 +221,10 @@ def totales_15min(df, movs, excluidos):
 def detectar_hora_pico(totales, ventana=VENTANA_PICO):
     serie = totales["TOTAL"].to_numpy()
     if len(serie) < ventana:
-        raise ValueError(f"Se necesitan >= {ventana} bloques. Hay {len(serie)}.")
+        raise ValueError(
+            f"El censo tiene {len(serie)} bloque(s) de 15 min; se necesitan "
+            f"al menos {ventana} (1 hora) para calcular la hora pico."
+        )
     sumas = [serie[i:i + ventana].sum() for i in range(len(serie) - ventana + 1)]
     idx = int(pd.Series(sumas).idxmax())
     ini = totales.loc[idx, "hora_inicio"]
@@ -342,19 +408,28 @@ def tabla_pesados(df_origen, movs, tipos_pesados, tipos_excluidos,
 # ─────────────────────────────────────────────────────────────
 # Pipeline
 # ─────────────────────────────────────────────────────────────
-def procesar(ruta, excluidos=None, nombre_fila_total=None,
-             calcular_pesados=None, tipos_pesados=None):
+def procesar(ruta=None, excluidos=None, nombre_fila_total=None,
+             calcular_pesados=None, tipos_pesados=None, precargado=None):
     """
     Pipeline completo de cálculo. Acepta ruta o buffer (BytesIO).
 
     Los parámetros en None se toman de la hoja CONFIG (con sus defaults).
     Es la misma función que usa la app Streamlit y la CLI (`main`).
 
+    `precargado`: dict opcional con las hojas ya leídas y normalizadas
+    ({"cfg", "mapa", "datos": (df, movs)}), para no volver a leer el Excel.
+    Si se pasa, se ignora `ruta`. Lo arma `leer_censo`.
+
     Devuelve un dict con: cfg, mapa, df, movs, excluidos,
     nombre_fila_total, totales, pico, fhp_data, resumen_plano,
     resumen_agr, pesados_hp, pesados_total.
     """
-    cfg = leer_config(ruta)
+    if precargado is not None:
+        cfg = precargado.get("cfg", {})
+        mapa = precargado.get("mapa")
+        df, movs = precargado["datos"]
+    else:
+        cfg, mapa, df, movs = leer_censo(ruta)
 
     if excluidos is None:
         if "tipos_excluidos" in cfg:
@@ -369,9 +444,6 @@ def procesar(ruta, excluidos=None, nombre_fila_total=None,
                             .strip().upper() == "SI")
     if tipos_pesados is None:
         tipos_pesados = parse_lista(cfg, "tipos_pesados")
-
-    mapa = leer_mapa(ruta)
-    df, movs = leer_datos(ruta)
 
     # El MAPA es la fuente de verdad: los movimientos de DATOS que no
     # tienen fila en MAPA se ignoran en todo el pipeline (totales, hora

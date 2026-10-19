@@ -5,9 +5,11 @@ Ejecutar:
     streamlit run app.py
 """
 
+import base64
 import copy
 import hashlib
 import io
+import json
 from datetime import date, datetime
 from pathlib import Path
 
@@ -97,37 +99,31 @@ def _parse_fecha_cfg(texto):
 
 
 @st.cache_data(show_spinner=False)
-def _leer_estructura(contenido: bytes):
-    """Lee CONFIG (vía motor) y los tipos de DATOS, para poblar la UI."""
-    xls = pd.ExcelFile(io.BytesIO(contenido))
-    if "DATOS" not in xls.sheet_names:
-        raise ValueError("El archivo no tiene una hoja 'DATOS'.")
+def _leer_censo(contenido: bytes):
+    """Lee DATOS/MAPA/CONFIG del Excel en UNA sola pasada (cacheada).
 
-    cfg = motor.leer_config(io.BytesIO(contenido))
-
-    df_datos = pd.read_excel(io.BytesIO(contenido), sheet_name="DATOS",
-                             dtype=str)
-    tipos = []
-    if "tipo_vehiculo" in df_datos.columns:
-        tipos = sorted(df_datos["tipo_vehiculo"].dropna().astype(str)
-                       .str.strip().unique().tolist())
-    return cfg, tipos
+    Devuelve (cfg, mapa, df, movs) ya normalizados por el motor. La usan
+    tanto la UI (tipos, sugerencia de croquis) como el procesamiento.
+    """
+    return motor.leer_censo(io.BytesIO(contenido))
 
 
 @st.cache_data(show_spinner=False)
-def _leer_movimientos_mapa(contenido: bytes):
-    """Lee SOLO la hoja MAPA (chica) para sugerir el tipo de croquis al subir.
+def _procesar(contenido: bytes, excluidos: tuple, nombre_fila_total: str,
+              calcular_pesados: bool, tipos_pesados: tuple):
+    """Pipeline cacheado: solo reprocesa si cambia el archivo o la config.
 
-    Devuelve el DataFrame o None si la hoja no existe o no tiene la columna
-    'movimiento'. Rápida a propósito: no toca DATOS ni CONFIG.
+    Reutiliza la lectura única (`_leer_censo`) y se la pasa al motor como
+    `precargado`, así el Excel no se vuelve a leer.
     """
-    try:
-        df = pd.read_excel(io.BytesIO(contenido), sheet_name="MAPA", dtype=str)
-    except Exception:
-        return None
-    if "movimiento" not in df.columns:
-        return None
-    return df
+    cfg, mapa, df, movs = _leer_censo(contenido)
+    return motor.procesar(
+        excluidos=list(excluidos),
+        nombre_fila_total=nombre_fila_total,
+        calcular_pesados=bool(calcular_pesados),
+        tipos_pesados=list(tipos_pesados),
+        precargado={"cfg": cfg, "mapa": mapa, "datos": (df, movs)},
+    )
 
 
 def _imagenes_reporte(figuras):
@@ -168,6 +164,94 @@ def _filas_dos_columnas(figs, alto_web):
             with col:
                 st.plotly_chart(_web(fig, alto_web), use_container_width=True)
 
+
+
+def _muestras_paleta(paleta) -> str:
+    """Barra de muestras de color (una por serie) para previsualizar."""
+    cajas = "".join(
+        f'<div style="flex:1; height:26px; border-radius:4px; '
+        f'background:{c}; border:1px solid #d0d0d0;" title="{c}"></div>'
+        for c in paleta
+    )
+    return f'<div style="display:flex; gap:4px;">{cajas}</div>'
+
+
+def _boton_copiar_imagen(png, svg, clave):
+    """Botón que copia el croquis al portapapeles (PNG; SVG como respaldo).
+
+    Se dibuja en un iframe propio (components.html) porque necesita JS.
+    """
+    img_b64 = base64.b64encode(png).decode("ascii") if png else ""
+    svg_js = json.dumps(svg)
+    html = f"""
+    <button id="cp_{clave}" style="width:100%; padding:0.5rem;
+        border:1px solid rgba(49,51,63,0.2); border-radius:0.5rem;
+        background:#fff; color:#31333F; font-size:0.875rem; cursor:pointer;">
+        📋 Copiar imagen</button>
+    <script>
+      const btn = document.getElementById('cp_{clave}');
+      const imgB64 = "{img_b64}";
+      const svgTxt = {svg_js};
+      btn.onclick = async () => {{
+        try {{
+          if (imgB64) {{
+            const blob = await (await fetch(
+              "data:image/png;base64," + imgB64)).blob();
+            await navigator.clipboard.write(
+              [new ClipboardItem({{"image/png": blob}})]);
+            btn.textContent = "✅ Copiado";
+          }} else {{
+            await navigator.clipboard.writeText(svgTxt);
+            btn.textContent = "✅ Copiado (SVG)";
+          }}
+        }} catch (e) {{
+          try {{
+            await navigator.clipboard.writeText(svgTxt);
+            btn.textContent = "✅ Copiado (SVG)";
+          }} catch (e2) {{
+            btn.textContent = "⚠️ No se pudo copiar";
+          }}
+        }}
+      }};
+    </script>
+    """
+    components.html(html, height=54)
+
+
+@st.cache_data(show_spinner=False)
+def _svg_a_png(svg: str):
+    """Rasteriza un croquis SVG a PNG (cacheado por contenido del SVG)."""
+    return rep.svg_a_png(svg, ancho=1600)
+
+
+def _botones_croquis(nombre_base, svg):
+    """Descarga SVG/PNG y copia de un croquis, como la barra de las gráficas."""
+    png = _svg_a_png(svg)
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.download_button(
+            "⬇️ SVG",
+            data=svg.encode("utf-8"),
+            file_name=f"{nombre_base}.svg",
+            mime="image/svg+xml",
+            use_container_width=True,
+            key=f"dl_svg_{nombre_base}",
+        )
+    with c2:
+        if png:
+            st.download_button(
+                "⬇️ PNG",
+                data=png,
+                file_name=f"{nombre_base}.png",
+                mime="image/png",
+                use_container_width=True,
+                key=f"dl_png_{nombre_base}",
+            )
+        else:
+            st.button("⬇️ PNG (no disponible)", disabled=True,
+                      use_container_width=True, key=f"dl_png_na_{nombre_base}")
+    with c3:
+        _boton_copiar_imagen(png, svg, nombre_base)
 
 
 @st.cache_data(show_spinner="📄 Generando PDF…")
@@ -277,20 +361,39 @@ MAPEO_FIJO = {
 _SUFIJOS_RAMA = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
 
 
+def _posicion_de(mov, mapa_df):
+    """Posición del croquis (p. ej. 'N_IZQ') para un movimiento.
+
+    Prioridad: columna opcional 'posicion' de la hoja MAPA (la genera el
+    mapeador visual). Si el MAPA no la trae o viene vacía, cae al MAPEO_FIJO.
+    """
+    if mapa_df is not None and "posicion" in mapa_df.columns:
+        filas = mapa_df[mapa_df["movimiento"].astype(str).str.strip() == mov]
+        if len(filas):
+            pos = str(filas.iloc[0]["posicion"]).strip()
+            if pos and pos.lower() not in ("nan", "none"):
+                return pos
+    return MAPEO_FIJO.get(mov)
+
+
 def _inferir_nombres_ramas(mapa_df, movs_activos):
     """
     Devuelve {"N": "Fiambalá Norte", ...} inferido del MAPA,
-    mirando a qué rama del croquis va cada movimiento según MAPEO_FIJO.
+    mirando a qué rama del croquis va cada movimiento (columna 'posicion'
+    del MAPA, o MAPEO_FIJO como respaldo).
     """
     nombres = {rama: "" for rama in _SUFIJOS_RAMA}
 
     if mapa_df is not None:
         for _, row in mapa_df.iterrows():
             mov = str(row["movimiento"]).strip()
-            if mov not in movs_activos or mov not in MAPEO_FIJO:
+            if mov not in movs_activos:
                 continue
-            rama = MAPEO_FIJO[mov].split("_")[0]
-            if not nombres[rama]:
+            pos = _posicion_de(mov, mapa_df)
+            if not pos:
+                continue
+            rama = pos.split("_")[0]
+            if rama in nombres and not nombres[rama]:
                 nombres[rama] = f"{str(row['calle']).strip()} {_SUFIJOS_RAMA[rama]}"
 
     # Fallback: "Norte", "Sur", ...
@@ -301,24 +404,35 @@ def _inferir_nombres_ramas(mapa_df, movs_activos):
 
 
 def _inferir_mapeo_default(mapa_df, movs_activos):
-    """Devuelve el mapeo fijo para los movimientos que existan."""
-    return {m: p for m, p in MAPEO_FIJO.items() if m in movs_activos}
+    """Mapeo movimiento → posición del croquis.
+
+    Usa la columna 'posicion' del MAPA si está; si no, el MAPEO_FIJO.
+    """
+    mapeo = {}
+    for m in movs_activos:
+        pos = _posicion_de(m, mapa_df)
+        if pos:
+            mapeo[m] = pos
+    return mapeo
 
 
 def _inferir_tipo_croquis(mapa_df, movs_activos):
     """
     Infere el tipo de croquis por ESTRUCTURA del MAPA: cuenta las ramas
-    distintas (N/S/E/O) a las que van los movimientos activos según
-    MAPEO_FIJO. 4 ramas → "Cruz", 3 → "T", ≤2 → "Ruta".
+    distintas (N/S/E/O) a las que van los movimientos activos (según la
+    columna 'posicion' del MAPA o MAPEO_FIJO). 4 ramas → "Cruz", 3 → "T",
+    ≤2 → "Ruta".
     """
     if mapa_df is None:
         return "Cruz"
     movs_mapa = {str(m).strip() for m in mapa_df["movimiento"]}
-    ramas = {
-        MAPEO_FIJO[m].split("_")[0]
-        for m in movs_activos
-        if m in movs_mapa and m in MAPEO_FIJO
-    }
+    ramas = set()
+    for m in movs_activos:
+        if m not in movs_mapa:
+            continue
+        pos = _posicion_de(m, mapa_df)
+        if pos:
+            ramas.add(pos.split("_")[0])
     if len(ramas) >= 4:
         return "Cruz"
     if len(ramas) == 3:
@@ -370,15 +484,22 @@ if archivo is None:
     st.stop()
 
 contenido = archivo.getvalue()
+
+# Lectura ÚNICA del Excel (cacheada): sirve para la UI, la sugerencia de
+# tipo de croquis y el procesamiento posterior.
 try:
-    cfg_inicial, tipos_detectados = _leer_estructura(contenido)
+    cfg_inicial, mapa_inicial, df_inicial, movs_iniciales = _leer_censo(contenido)
 except Exception as e:
-    st.error(f"❌ Error al leer el archivo: {e}")
+    st.error(f"❌ No se pudo leer el archivo: {e}")
     st.stop()
 
-# Lectura temprana del MAPA (solo esa hoja, instantáneo): permite sugerir
-# el tipo de croquis ANTES de procesar, sin correr el pipeline completo.
-mapa_temprano = _leer_movimientos_mapa(contenido)
+tipos_detectados = []
+if "tipo_vehiculo" in df_inicial.columns:
+    tipos_detectados = sorted(df_inicial["tipo_vehiculo"].dropna()
+                              .astype(str).str.strip().unique().tolist())
+
+# El MAPA ya vino en la lectura única: se usa para sugerir el tipo de croquis.
+mapa_temprano = mapa_inicial
 movs_tempranos = (
     [str(m).strip() for m in mapa_temprano["movimiento"].dropna().unique()]
     if mapa_temprano is not None else []
@@ -515,17 +636,34 @@ with col_t2:
         help="Si lo dejás vacío, se usa el Día + la Fecha del reporte.",
     )
 
-with st.expander("🖌️ Paleta de colores (8 series)"):
-    st.caption("Se aplica a líneas, barras, tortas y % de pesados. "
-               "Cambiá un color y volvé a clickear ▶️ Procesar censo.")
-    cols_color = st.columns(8)
-    paleta = []
-    for i, col_color in enumerate(cols_color):
-        with col_color:
-            paleta.append(st.color_picker(
-                f"Serie {i + 1}", grf.PALETA_DEFAULT[i],
-                key=f"color_serie_{i}",
-            ))
+with st.expander("🖌️ Paleta de colores", expanded=True):
+    st.caption("Elegí una combinación lista o personalizá cada color. "
+               "Se aplica a líneas, barras, tortas y % de pesados.")
+    nombres_paletas = list(grf.PALETAS_PREDEFINIDAS)
+    col_sel, col_vista = st.columns([1, 2])
+    with col_sel:
+        nombre_paleta = st.selectbox("Combinación", nombres_paletas)
+    paleta_base = list(grf.PALETAS_PREDEFINIDAS[nombre_paleta])
+    with col_vista:
+        st.markdown(_muestras_paleta(paleta_base), unsafe_allow_html=True)
+
+    personalizar = st.checkbox("Personalizar colores manualmente")
+    if personalizar:
+        # Al cambiar la combinación, los pickers vuelven a sus colores.
+        if st.session_state.get("_paleta_base_sel") != nombre_paleta:
+            st.session_state["_paleta_base_sel"] = nombre_paleta
+            for i in range(len(paleta_base)):
+                st.session_state.pop(f"color_serie_{i}", None)
+        cols_color = st.columns(8)
+        paleta = []
+        for i, col_color in enumerate(cols_color):
+            with col_color:
+                paleta.append(st.color_picker(
+                    f"Serie {i + 1}", paleta_base[i],
+                    key=f"color_serie_{i}",
+                ))
+    else:
+        paleta = paleta_base
 
 
 # ─────────────────────────────────────────────────────────────
@@ -568,14 +706,14 @@ if not st.button("▶️ Procesar censo", type="primary"):
 
 with st.spinner("Procesando..."):
     try:
-        # El motor recibe el buffer directamente (sin archivo temporal)
-        # y la configuración como parámetros (sin reescribir el Excel).
-        res = motor.procesar(
-            io.BytesIO(contenido),
-            excluidos=excluidos or motor.TIPOS_EXCLUIDOS_DEFAULT,
-            nombre_fila_total=nombre_fila_total,
-            calcular_pesados=calcular_pesados,
-            tipos_pesados=list(tipos_pesados),
+        # El pipeline está cacheado y reutiliza la lectura única del Excel
+        # (no se vuelve a leer el archivo).
+        res = _procesar(
+            contenido,
+            tuple(excluidos or motor.TIPOS_EXCLUIDOS_DEFAULT),
+            nombre_fila_total,
+            bool(calcular_pesados),
+            tuple(tipos_pesados),
         )
     except Exception as e:
         st.error(f"❌ Error al procesar el censo: {e}")
@@ -778,75 +916,26 @@ st.subheader("🗺️ Croquis de la intersección")
 nombres_inferidos = _inferir_nombres_ramas(mapa, movs)
 mapeo_default = _inferir_mapeo_default(mapa, movs)
 
-# ── Referencia visual + nombres de ramas/extremos (editables) ──
-nombres_ramas = {}
-nombres_extremos = {}
-with st.expander("📖 ¿Qué movimiento es cada M?"):
-    st.caption("Esquemas de referencia (sin valores). El mapeo concreto "
-               "se configura más abajo.")
-    for titulo, ruta in [
-        ("Cruz — 4 ramas (N, S, E, O)", "assets/croquis_cruz.svg"),
-        ("T — 3 ramas (S, O, E; sin Norte)", "assets/croquis_T.svg"),
-        ("Ruta — ida y vuelta", "assets/croquis_ruta.svg"),
-    ]:
-        st.markdown(f"**{titulo}**")
-        st.markdown(
-            f'<div style="max-width:750px; margin:0 auto;">'
-            f'{croquis_svg.leer_svg_esquema(ruta)}</div>',
-            unsafe_allow_html=True,
-        )
+# ── Nombres de ramas/extremos y mapeo, derivados del MAPA ──
+# El mapeador visual (mapeador_croquis.html) genera la columna 'posicion'
+# de la hoja MAPA; si falta, _posicion_de() cae al MAPEO_FIJO.
+if tipo_croquis == "Ruta":
+    nombres_ramas = {}
+    nombres_extremos = {"O": nombres_inferidos["O"],
+                        "E": nombres_inferidos["E"]}
+else:
+    ramas_ui = (["S", "E", "O"] if tipo_croquis == "T"
+                else ["N", "S", "E", "O"])
+    nombres_ramas = {rama: nombres_inferidos[rama] for rama in ramas_ui}
+    nombres_extremos = {}
 
-    st.divider()
-    # ── Nombres de ramas / extremos (editables, según el tipo) ──
-    if tipo_croquis == "Ruta":
-        st.markdown("**Nombres de los extremos** (editables)")
-        c1, c2 = st.columns(2)
-        with c1:
-            nombre_oeste = st.text_input("Extremo Oeste",
-                                         value=nombres_inferidos["O"],
-                                         key="nom_O")
-        with c2:
-            nombre_este = st.text_input("Extremo Este",
-                                        value=nombres_inferidos["E"],
-                                        key="nom_E")
-        nombres_extremos = {"O": nombre_oeste, "E": nombre_este}
-    else:
-        ramas_ui = (["S", "E", "O"] if tipo_croquis == "T"
-                    else ["N", "S", "E", "O"])
-        st.markdown("**Nombres de las ramas** (editables)")
-        cols = st.columns(len(ramas_ui))
-        for col, rama in zip(cols, ramas_ui):
-            with col:
-                nombres_ramas[rama] = st.text_input(
-                    f"Rama {nombres_inferidos[rama].title()}",
-                    value=nombres_inferidos[rama],
-                    key=f"nom_{rama}",
-                )
+mapeo_final = dict(mapeo_default)
 
-# ── Mapeo movimiento → posición del croquis ──
-with st.expander("🎯 Mapeo de movimientos (a qué flecha del croquis va cada uno)"):
-    if tipo_croquis == "Cruz":
-        opciones_mapeo = list(croquis_svg.ORDEN_CANONICO)
-    elif tipo_croquis == "T":
-        opciones_mapeo = [p for p in croquis_svg.ORDEN_CANONICO
-                          if p not in croquis_svg.SLOTS_INVALIDOS_T
-                          and not p.startswith("N_")]
-    else:
-        opciones_mapeo = list(croquis_svg.POSICIONES_RUTA)
-
-    OPCIONES_MAPEO = ["— (no mostrar)"] + opciones_mapeo
-
-    mapeo_final = {}
-    cols_mapeo = st.columns(4)
-    for i, mov in enumerate(movs):
-        with cols_mapeo[i % 4]:
-            default = mapeo_default.get(mov, "— (no mostrar)")
-            idx = (OPCIONES_MAPEO.index(default)
-                   if default in OPCIONES_MAPEO else 0)
-            seleccion = st.selectbox(f"{mov}", OPCIONES_MAPEO, index=idx,
-                                     key=f"map_{mov}")
-            if seleccion != "— (no mostrar)":
-                mapeo_final[mov] = seleccion
+if not mapeo_final:
+    st.warning(
+        "No se pudo ubicar ningún movimiento en el croquis. Agregá la "
+        "columna 'posicion' a la hoja MAPA con el mapeador visual."
+    )
 
 # ── Volúmenes ──
 # Hora pico: desde resumen_plano (ya excluye tipos configurados)
@@ -876,10 +965,9 @@ if mapa is not None and len(mapeo_final) > 0:
         height=altura_hp,
         scrolling=False,
     )
-    croquis_reporte.append(
-        (f"Croquis {tipo_croquis} — hora pico",
-         croquis_svg.extraer_svg(svg_hp_html))
-    )
+    svg_hp = croquis_svg.extraer_svg(svg_hp_html)
+    croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
+    _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
 
     # ── Croquis total ──
     st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
@@ -891,10 +979,9 @@ if mapa is not None and len(mapeo_final) > 0:
         height=altura_total,
         scrolling=False,
     )
-    croquis_reporte.append(
-        (f"Croquis {tipo_croquis} — total del censo",
-         croquis_svg.extraer_svg(svg_total_html))
-    )
+    svg_total = croquis_svg.extraer_svg(svg_total_html)
+    croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo", svg_total))
+    _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
 
 # ─────────────────────────────────────────────────────────────
 # 9) Descargas

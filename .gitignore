@@ -22,6 +22,7 @@ venv/
 
 # Plotly
 *.html
+!mapeador_croquis.html
 
 # IDEs
 .vscode/

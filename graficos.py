@@ -21,6 +21,32 @@ PALETA_DEFAULT = [
     "#ff7f0e", "#8c564b", "#e377c2", "#7f7f7f",
 ]
 
+# Combinaciones listas para elegir desde la app (estilo "temas" de Excel).
+# Todas tienen 8 colores, en el mismo orden de series que PALETA_DEFAULT.
+PALETAS_PREDEFINIDAS = {
+    "Por defecto": PALETA_DEFAULT,
+    "Excel": [
+        "#4472C4", "#ED7D31", "#A5A5A5", "#FFC000",
+        "#5B9BD5", "#70AD47", "#264478", "#9E480E",
+    ],
+    "Pastel": [
+        "#8FB8DE", "#F2A65A", "#7FC97F", "#E68FB6",
+        "#B39DDB", "#F4D35E", "#F49AC1", "#6FC3C0",
+    ],
+    "Vibrante": [
+        "#E6194B", "#3CB44B", "#FFE119", "#4363D8",
+        "#F58231", "#911EB4", "#42D4F4", "#F032E6",
+    ],
+    "Corporativa": [
+        "#003366", "#336699", "#6699CC", "#99CCFF",
+        "#FF9900", "#FFCC00", "#CC3300", "#666666",
+    ],
+    "Alto contraste": [
+        "#0072B2", "#E69F00", "#009E73", "#CC79A7",
+        "#56B4E9", "#D55E00", "#F0E442", "#000000",
+    ],
+}
+
 
 # ─────────────────────────────────────────────────────────────
 # Helpers

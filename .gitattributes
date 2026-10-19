@@ -1,0 +1,11 @@
+# Normalización de finales de línea: el repo guarda LF.
+* text=auto
+
+# Binarios explícitos (no normalizar)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.docx binary
+*.xlsx binary
+*.ttf binary
