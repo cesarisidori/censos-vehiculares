@@ -6,10 +6,11 @@ Renderiza croquis SVG con valores dinámicos.
 El SVG tiene <text id="..."> con valores placeholder (0, M1, etc.).
 Esta función reemplaza el contenido de esos textos con valores reales.
 
-Hay 3 tipos de croquis, cada uno con su SVG en assets/:
-  - Cruz → assets/croquis_cruz.svg  (4 ramas: N, S, E, O)
-  - T    → assets/croquis_T.svg     (3 ramas: S, O, E — sin Norte)
-  - Ruta → assets/croquis_ruta.svg  (2 extremos, ida y vuelta)
+Hay 4 variantes de croquis, cada una con su SVG en assets/:
+  - Cruz     → assets/croquis_cruz.svg       (4 ramas: N, S, E, O)
+  - T(sur)   → assets/croquis_T.svg          (3 ramas: S, O, E — sin Norte)
+  - T(norte) → assets/croquis_T_norte.svg    (3 ramas: N, O, E — sin Sur)
+  - Ruta     → assets/croquis_ruta.svg       (2 extremos, ida y vuelta)
 """
 
 import re
@@ -34,14 +35,26 @@ DESTINO_T = {
 
 RAMAS_T = ("S", "O", "E")
 
+# Tabla de destinos de la T(norte) (no existe rama Sur).
+DESTINO_T_NORTE = {
+    ("N", "IZQ"): "E", ("N", "FTE"): None, ("N", "DER"): "O",
+    ("O", "IZQ"): "N", ("O", "FTE"): "E", ("O", "DER"): None,
+    ("E", "IZQ"): None, ("E", "FTE"): "O", ("E", "DER"): "N",
+}
+
+RAMAS_T_NORTE = ("N", "O", "E")
+
 # Slots que no existen como movimiento en la T. El SVG corregido ya NO los
 # dibuja (no hay textos con esos ids). Se mantiene la constante porque la
 # usan app.py (excluir opciones del selector de mapeo) y croquis_svg.py
 # (filtrado en cálculo y render).
 SLOTS_INVALIDOS_T = {"S_FTE", "O_IZQ", "E_DER"}
+SLOTS_INVALIDOS_T_NORTE = {"N_FTE", "O_DER", "E_IZQ"}
 
 # Posiciones válidas para mapear movimientos en cada tipo de croquis.
 POSICIONES_T = ["S_IZQ", "S_DER", "O_FTE", "O_DER", "E_IZQ", "E_FTE"]
+POSICIONES_T_NORTE = ["N_IZQ", "N_DER", "O_FTE", "O_IZQ",
+                      "E_FTE", "E_DER"]
 POSICIONES_RUTA = ["O_IZQ", "O_FTE"]
 
 # Orden canonico de las 12 posiciones de la cruz. Lo usan los selectores
@@ -149,16 +162,12 @@ def calcular_entradas_salidas(volumenes, mapeo):
     return entradas, salidas
 
 
-def calcular_entradas_salidas_T(volumenes, mapeo):
-    """
-    Igual que calcular_entradas_salidas pero para la T: solo ramas
-    S, O, E; los movimientos en slots inválidos se ignoran y los giros
-    con destino None (DESTINO_T) no suman salida.
-    Devuelve (entradas, salidas) — dict {rama: int}.
-    """
-    datos = {r: {"IZQ": 0, "FTE": 0, "DER": 0} for r in RAMAS_T}
+def _calcular_entradas_salidas_T(volumenes, mapeo, ramas,
+                                 slots_invalidos, destino):
+    """Cálculo común de entradas/salidas para las variantes de la T."""
+    datos = {r: {"IZQ": 0, "FTE": 0, "DER": 0} for r in ramas}
     for mov, pos in mapeo.items():
-        if "_" not in pos or pos in SLOTS_INVALIDOS_T:
+        if "_" not in pos or pos in slots_invalidos:
             continue
         rama, dir_ = pos.split("_", 1)
         if rama in datos and dir_ in datos[rama]:
@@ -169,16 +178,39 @@ def calcular_entradas_salidas_T(volumenes, mapeo):
     salidas = {r: 0 for r in datos}
     for rama, dirs in datos.items():
         for d, val in dirs.items():
-            destino = DESTINO_T[(rama, d)]
-            if destino is not None:
-                salidas[destino] += val
+            destino_rama = destino[(rama, d)]
+            if destino_rama is not None:
+                salidas[destino_rama] += val
 
     return entradas, salidas
+
+
+def calcular_entradas_salidas_T(volumenes, mapeo):
+    """
+    Igual que calcular_entradas_salidas pero para la T(sur): solo ramas
+    S, O, E; los movimientos en slots inválidos se ignoran y los giros
+    con destino None (DESTINO_T) no suman salida.
+    Devuelve (entradas, salidas) — dict {rama: int}.
+    """
+    return _calcular_entradas_salidas_T(
+        volumenes, mapeo, RAMAS_T, SLOTS_INVALIDOS_T, DESTINO_T)
+
+
+def calcular_entradas_salidas_T_norte(volumenes, mapeo):
+    """
+    Igual que calcular_entradas_salidas_T pero para la T(norte): solo
+    ramas N, O, E; los giros imposibles (DESTINO_T_NORTE) no suman salida.
+    Devuelve (entradas, salidas) — dict {rama: int}.
+    """
+    return _calcular_entradas_salidas_T(
+        volumenes, mapeo, RAMAS_T_NORTE, SLOTS_INVALIDOS_T_NORTE,
+        DESTINO_T_NORTE)
 
 
 RAMAS_OD = {
     "Cruz": ("N", "S", "E", "O"),
     "T": RAMAS_T,
+    "T_norte": RAMAS_T_NORTE,
     "Ruta": ("O", "E"),
 }
 
@@ -208,7 +240,8 @@ def calcular_matriz_od(volumenes, mapeo, tipo):
         matriz[idx["E"]][idx["O"]] = slots.get("O_FTE", 0)
         return ramas, matriz
 
-    destino = DESTINO_T if tipo == "T" else DESTINO
+    destinos_t = {"T": DESTINO_T, "T_norte": DESTINO_T_NORTE}
+    destino = destinos_t.get(tipo, DESTINO)
     for (rama, dir_), dest in destino.items():
         if rama not in idx or dest is None or dest not in idx:
             continue
@@ -289,30 +322,25 @@ def renderizar_svg_cruz(volumenes, mapeo, nombres_ramas,
     return html, altura
 
 
-def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
-                     ruta_svg="assets/croquis_T.svg"):
-    """
-    Lee el SVG de la T y reemplaza los valores dinámicos.
-    - Slots inválidos (S_FTE, O_IZQ, E_DER): el SVG corregido ya no los
-    dibuja; _reemplazar_texto es tolerante y no hace nada si falta el id.
-    - Slots válidos sin movimiento mapeado → también guión.
-    - Entradas/salidas según DESTINO_T (sin rama Norte).
-    """
+def _renderizar_svg_T(volumenes, mapeo, nombres_ramas, ruta_svg,
+                      ramas, posiciones, slots_invalidos, destino):
+    """Render común para las variantes de la T."""
     svg = _cargar_svg(ruta_svg)
 
-    entradas, salidas = calcular_entradas_salidas_T(volumenes, mapeo)
+    entradas, salidas = _calcular_entradas_salidas_T(
+        volumenes, mapeo, ramas, slots_invalidos, destino)
 
     # Invertir el mapeo: slot → movimiento (solo slots válidos de la T)
     slot_a_mov = {}
     for mov, pos in mapeo.items():
-        if pos in POSICIONES_T:
+        if pos in posiciones:
             slot_a_mov[pos] = mov
 
-    for rama in RAMAS_T:
+    for rama in ramas:
         for dir_ in ("IZQ", "FTE", "DER"):
             slot = f"{rama}_{dir_}"
             mov = slot_a_mov.get(slot)
-            if slot in SLOTS_INVALIDOS_T or mov is None:
+            if slot in slots_invalidos or mov is None:
                 svg = _reemplazar_texto(svg, f"{slot}_nombre", GUION)
                 svg = _reemplazar_texto(svg, f"{slot}_volumen", GUION)
             else:
@@ -321,7 +349,7 @@ def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
                     svg, f"{slot}_volumen", str(volumenes.get(mov, 0))
                 )
 
-    for rama in RAMAS_T:
+    for rama in ramas:
         svg = _reemplazar_texto(
             svg, f"{rama}_calle_nombre",
             nombres_ramas.get(rama, "")
@@ -339,6 +367,34 @@ def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
     altura = _calcular_altura(svg)
     html = f'<html><body style="margin:0;padding:0;">{svg}</body></html>'
     return html, altura
+
+
+def renderizar_svg_T(volumenes, mapeo, nombres_ramas,
+                     ruta_svg="assets/croquis_T.svg"):
+    """
+    Lee el SVG de la T(sur) y reemplaza los valores dinámicos.
+    - Slots inválidos (S_FTE, O_IZQ, E_DER): el SVG corregido ya no los
+    dibuja; _reemplazar_texto es tolerante y no hace nada si falta el id.
+    - Slots válidos sin movimiento mapeado → también guión.
+    - Entradas/salidas según DESTINO_T (sin rama Norte).
+    """
+    return _renderizar_svg_T(
+        volumenes, mapeo, nombres_ramas, ruta_svg,
+        RAMAS_T, POSICIONES_T, SLOTS_INVALIDOS_T, DESTINO_T)
+
+
+def renderizar_svg_T_norte(volumenes, mapeo, nombres_ramas,
+                           ruta_svg="assets/croquis_T_norte.svg"):
+    """
+    Lee el SVG de la T(norte) y reemplaza los valores dinámicos.
+    - Slots inválidos (N_FTE, O_DER, E_IZQ): no se dibujan en el SVG.
+    - Slots válidos sin movimiento mapeado → guión.
+    - Entradas/salidas según DESTINO_T_NORTE (sin rama Sur).
+    """
+    return _renderizar_svg_T(
+        volumenes, mapeo, nombres_ramas, ruta_svg,
+        RAMAS_T_NORTE, POSICIONES_T_NORTE, SLOTS_INVALIDOS_T_NORTE,
+        DESTINO_T_NORTE)
 
 
 def renderizar_svg_ruta(volumenes, mapeo, nombres_extremos,

@@ -11,9 +11,9 @@ Aplicación en Python + Streamlit para procesar censos de tránsito vehicular.
 - Gráficos interactivos (líneas, barras, tortas) con **paleta de colores**:
   combinaciones predefinidas (estilo Excel, pastel, vibrante, etc.) y
   edición manual opcional de cada serie.
-- Croquis de la intersección (**Cruz**, **T** o **Ruta** — el tipo se
-  infiere del MAPA y es sobrescribible) con Entrada/Salida por rama, y
-  descarga/copia de cada croquis en **SVG** o **PNG**.
+- Croquis de la intersección (**Cruz**, **T(sur)**, **T(norte)** o **Ruta**
+  — el tipo se infiere del MAPA y es sobrescribible) con Entrada/Salida por
+  rama, y descarga/copia de cada croquis en **SVG** o **PNG**.
 - Posición de cada movimiento en el croquis vía la columna `posicion`
   de la hoja `MAPA`, generada con `mapeador_croquis.html`. Si falta, se
   usa el mapeo fijo (`M1`→`O_IZQ`, `M2`→`O_FTE`, …).
@@ -75,7 +75,8 @@ python3 test_croquis.py                                    # croquis → croquis
 python3 test_reportes.py                                   # reportes → test_reporte.pdf/.docx
 ```
 
-Hay 3 archivos de ejemplo, uno por tipo de croquis:
+Hay 3 archivos de ejemplo:
 `censo_ejemplo_cruz.xlsx` (12 movimientos, 4 ramas),
-`censo_ejemplo_T.xlsx` (9 movimientos, sin rama Norte) y
+`censo_ejemplo_T.xlsx` (9 movimientos, T(sur), sin rama Norte) y
 `censo_ejemplo_ruta.xlsx` (2 movimientos, ida y vuelta).
+La variante T(norte) se puede probar con `test_croquis.py`.

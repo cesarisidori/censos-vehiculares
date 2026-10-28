@@ -77,6 +77,82 @@ def test_od_total_es_consistente():
     assert total_tabla == total_matriz == 12
 
 
+def _datos_t_norte():
+    """Volúmenes y mapeo de prueba con slots válidos e inválidos."""
+    volumenes = {
+        "M7": 10, "M8": 20, "M9": 30,
+        "M1": 5, "M2": 7, "M3": 11,
+        "M4": 13, "M5": 17, "M6": 19,
+    }
+    mapeo = {
+        "M7": "N_IZQ", "M8": "N_FTE", "M9": "N_DER",
+        "M1": "O_FTE", "M2": "O_IZQ", "M3": "O_DER",
+        "M4": "E_FTE", "M5": "E_IZQ", "M6": "E_DER",
+    }
+    return volumenes, mapeo
+
+
+def test_entradas_salidas_T_norte():
+    """T(norte) ignora slots inválidos y calcula entradas/salidas."""
+    volumenes, mapeo = _datos_t_norte()
+    entradas, salidas = croquis_svg.calcular_entradas_salidas_T_norte(
+        volumenes, mapeo)
+
+    assert entradas == {"N": 40, "O": 12, "E": 32}
+    assert salidas == {"N": 26, "O": 43, "E": 15}
+    assert sum(salidas.values()) == 84
+
+
+def test_od_T_norte():
+    """La matriz O-D de T(norte) respeta los destinos del diseño."""
+    volumenes, mapeo = _datos_t_norte()
+    ramas, matriz = croquis_svg.calcular_matriz_od(
+        volumenes, mapeo, "T_norte")
+    idx = {r: i for i, r in enumerate(ramas)}
+
+    assert ramas == ("N", "O", "E")
+    assert matriz[idx["N"]][idx["E"]] == 10
+    assert matriz[idx["N"]][idx["O"]] == 30
+    assert matriz[idx["O"]][idx["N"]] == 7
+    assert matriz[idx["O"]][idx["E"]] == 5
+    assert matriz[idx["E"]][idx["N"]] == 19
+    assert matriz[idx["E"]][idx["O"]] == 13
+
+    total = sum(v for fila in matriz for v in fila if v is not None)
+    filas = croquis_svg.filas_tabla_od(volumenes, mapeo, "T_norte")
+    assert total == int(filas[-1][-1]) == 84
+
+
+def test_render_T_norte():
+    """El render de T(norte) usa los IDs N y no toca los S."""
+    volumenes, mapeo = _datos_t_norte()
+    html, _ = croquis_svg.renderizar_svg_T_norte(
+        volumenes, mapeo,
+        {"N": "RP 18 Norte", "O": "Av. Central Oeste",
+         "E": "Av. Central Este"})
+
+    assert 'id="N_IZQ_nombre"' in html
+    assert 'id="N_IZQ_volumen"' in html
+    assert ">M7</text>" in html
+    assert ">10</text>" in html
+    assert ">Entrada: 40</text>" in html
+    assert ">Salida: 26</text>" in html
+    assert "N_FTE_nombre" not in html
+    assert "S_IZQ" not in html
+
+
+def test_render_T_sur_sigue_funcionando():
+    """La variante T(sur) conserva sus IDs y valores."""
+    html, _ = croquis_svg.renderizar_svg_T(
+        {"M1": 5}, {"M1": "S_IZQ"},
+        {"S": "RP 18 Sur", "O": "Oeste", "E": "Este"})
+
+    assert 'id="S_IZQ_nombre"' in html
+    assert ">M1</text>" in html
+    assert ">5</text>" in html
+    assert 'id="N_IZQ_nombre"' not in html
+
+
 def _ejecutar_todos():
     pruebas = [v for k, v in sorted(globals().items())
                if k.startswith("test_") and callable(v)]

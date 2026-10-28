@@ -20,6 +20,8 @@ def limpiar_svg(texto: str) -> str:
 
 svg_cruz = limpiar_svg((ASSETS / "croquis_cruz.svg").read_text(encoding="utf-8"))
 svg_t = limpiar_svg((ASSETS / "croquis_T.svg").read_text(encoding="utf-8"))
+svg_t_norte = limpiar_svg(
+    (ASSETS / "croquis_T_norte.svg").read_text(encoding="utf-8"))
 svg_ruta = limpiar_svg((ASSETS / "croquis_ruta.svg").read_text(encoding="utf-8"))
 
 PLANTILLA = r"""<!DOCTYPE html>
@@ -71,7 +73,7 @@ PLANTILLA = r"""<!DOCTYPE html>
   button.verde:hover { background: #166f30; }
   .fila { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
   .fila > div { flex: 1; min-width: 220px; }
-  .tipos { display: flex; gap: 8px; }
+  .tipos { display: flex; gap: 8px; flex-wrap: wrap; }
   .tipo-btn.activo { background: var(--azul); color: #fff; border-color: var(--azul); }
   .grid { display: grid; grid-template-columns: minmax(0,1fr) 360px; gap: 16px; align-items: start; }
   @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
@@ -127,7 +129,8 @@ PLANTILLA = r"""<!DOCTYPE html>
         <label>Tipo de croquis</label>
         <div class="tipos">
           <button class="tipo-btn activo" data-tipo="Cruz" onclick="cargarTipo('Cruz')">Cruz</button>
-          <button class="tipo-btn" data-tipo="T" onclick="cargarTipo('T')">T</button>
+          <button class="tipo-btn" data-tipo="T" onclick="cargarTipo('T')">T(sur)</button>
+          <button class="tipo-btn" data-tipo="T_norte" onclick="cargarTipo('T_norte')">T(norte)</button>
           <button class="tipo-btn" data-tipo="Ruta" onclick="cargarTipo('Ruta')">Ruta</button>
         </div>
       </div>
@@ -197,6 +200,7 @@ PLANTILLA = r"""<!DOCTYPE html>
 __SCRIPT_SVG__const POSICIONES = {
   Cruz: ["N_IZQ","N_FTE","N_DER","S_IZQ","S_FTE","S_DER","E_IZQ","E_FTE","E_DER","O_IZQ","O_FTE","O_DER"],
   T:    ["S_IZQ","S_DER","O_FTE","O_DER","E_IZQ","E_FTE"],
+  T_norte: ["N_IZQ","N_DER","O_FTE","O_IZQ","E_FTE","E_DER"],
   Ruta: ["O_IZQ","O_FTE"]
 };
 const ETIQUETA = {
@@ -577,6 +581,7 @@ script_svg = (
     "const SVG_SRC = {\n"
     f"  Cruz: b64utf8('{b64(svg_cruz)}'),\n"
     f"  T: b64utf8('{b64(svg_t)}'),\n"
+    f"  T_norte: b64utf8('{b64(svg_t_norte)}'),\n"
     f"  Ruta: b64utf8('{b64(svg_ruta)}')\n"
     "};\n"
 )

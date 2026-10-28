@@ -47,6 +47,25 @@ with open("croquis_T.html", "w") as f:
     f.write(html_T)
 print("Generated: croquis_T.html")
 
+# Generar croquis T(norte)
+html_T_norte, altura_T_norte = croquis_svg.renderizar_svg_T_norte(
+    volumenes=volumenes,
+    mapeo={
+        "M1": "O_FTE", "M2": "O_IZQ", "M3": "O_DER",
+        "M4": "E_FTE", "M5": "E_IZQ", "M6": "E_DER",
+        "M7": "N_IZQ", "M8": "N_FTE", "M9": "N_DER",
+    },
+    nombres_ramas={
+        "N": "RP 18 Norte",
+        "O": "El Caldén Oeste",
+        "E": "El Caldén Este",
+    },
+)
+
+with open("croquis_T_norte.html", "w") as f:
+    f.write(html_T_norte)
+print("Generated: croquis_T_norte.html")
+
 # Generar croquis ruta
 html_ruta, altura_ruta = croquis_svg.renderizar_svg_ruta(
     volumenes=volumenes,

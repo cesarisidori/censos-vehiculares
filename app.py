@@ -451,6 +451,13 @@ MAPEO_FIJO = {
 
 _SUFIJOS_RAMA = {"N": "Norte", "S": "Sur", "E": "Este", "O": "Oeste"}
 
+ETIQUETAS_TIPO_CROQUIS = {
+    "Cruz": "Cruz",
+    "T": "T(sur)",
+    "T_norte": "T(norte)",
+    "Ruta": "Ruta",
+}
+
 
 def _posicion_de(mov, mapa_df):
     """Posición del croquis (p. ej. 'N_IZQ') para un movimiento.
@@ -527,6 +534,8 @@ def _inferir_tipo_croquis(mapa_df, movs_activos):
     if len(ramas) >= 4:
         return "Cruz"
     if len(ramas) == 3:
+        if "N" in ramas and "S" not in ramas:
+            return "T_norte"
         return "T"
     return "Ruta"
 
@@ -545,7 +554,8 @@ def _inferir_tipo_croquis_temprano(mapa_df, movs_tempranos):
     if n == 12:
         return "Cruz"
     if 6 <= n <= 9:
-        return "T"
+        tipo = _inferir_tipo_croquis(mapa_df, movs_tempranos)
+        return tipo if tipo in ("T", "T_norte") else "T"
     if n == 2:
         return "Ruta"
     return _inferir_tipo_croquis(mapa_df, movs_tempranos)
@@ -560,6 +570,8 @@ def _posiciones_de(tipo):
         return list(croquis_svg.POSICIONES_RUTA)
     if tipo == "T":
         return list(croquis_svg.POSICIONES_T)
+    if tipo == "T_norte":
+        return list(croquis_svg.POSICIONES_T_NORTE)
     return list(croquis_svg.ORDEN_CANONICO)
 
 
@@ -572,7 +584,12 @@ def _grupos_rama(tipo):
     if tipo == "Ruta":
         return [("O_IZQ", "Ida (Oeste→Este)", ["O_IZQ"]),
                 ("O_FTE", "Vuelta (Este→Oeste)", ["O_FTE"])]
-    ramas = ["N", "S", "E", "O"] if tipo == "Cruz" else ["S", "O", "E"]
+    if tipo == "Cruz":
+        ramas = ["N", "S", "E", "O"]
+    elif tipo == "T_norte":
+        ramas = list(croquis_svg.RAMAS_T_NORTE)
+    else:
+        ramas = ["S", "O", "E"]
     grupos = []
     for rama in ramas:
         posiciones = [p for p in _posiciones_de(tipo)
@@ -613,6 +630,9 @@ def _render_croquis(tipo, volumenes, mapeo, nombres_ramas, nombres_extremos):
     """Dispatch: renderiza el SVG correspondiente al tipo de croquis."""
     if tipo == "T":
         return croquis_svg.renderizar_svg_T(volumenes, mapeo, nombres_ramas)
+    if tipo == "T_norte":
+        return croquis_svg.renderizar_svg_T_norte(
+            volumenes, mapeo, nombres_ramas)
     if tipo == "Ruta":
         return croquis_svg.renderizar_svg_ruta(volumenes, mapeo,
                                                nombres_extremos)
@@ -843,19 +863,24 @@ if st.session_state.get("_tipo_croquis_archivo") != huella:
     # El mapeo integrado arranca activado sólo si el Excel no trae MAPA.
     st.session_state["chk_mapeo_manual"] = (mapa_inicial is None)
 
+opciones_tipo_croquis = list(ETIQUETAS_TIPO_CROQUIS)
 tipo_croquis = st.selectbox(
     "Tipo de croquis",
-    ["Cruz", "T", "Ruta"],
-    index=["Cruz", "T", "Ruta"].index(tipo_inferido),
+    opciones_tipo_croquis,
+    index=opciones_tipo_croquis.index(tipo_inferido),
+    format_func=lambda t: ETIQUETAS_TIPO_CROQUIS.get(t, t),
     key="tipo_croquis_sel",
     label_visibility="collapsed",
     help="Sugerido según la hoja MAPA. Cambialo acá y se reprocesa solo.",
 )
 
+etiqueta_tipo_inferido = ETIQUETAS_TIPO_CROQUIS.get(
+    tipo_inferido, tipo_inferido)
 if mapa_temprano is None:
-    st.caption(f"Sugerencia: {tipo_inferido} (no se detectó la hoja MAPA)")
+    st.caption(f"Sugerencia: {etiqueta_tipo_inferido} "
+               f"(no se detectó la hoja MAPA)")
 else:
-    st.caption(f"Sugerencia: {tipo_inferido} "
+    st.caption(f"Sugerencia: {etiqueta_tipo_inferido} "
                f"({len(movs_tempranos)} movimientos detectados)")
 
 
@@ -1209,10 +1234,17 @@ if tipo_croquis == "Ruta":
     nombres_extremos = {"O": nombres_inferidos["O"],
                         "E": nombres_inferidos["E"]}
 else:
-    ramas_ui = (["S", "E", "O"] if tipo_croquis == "T"
-                else ["N", "S", "E", "O"])
+    if tipo_croquis == "T":
+        ramas_ui = ["S", "E", "O"]
+    elif tipo_croquis == "T_norte":
+        ramas_ui = list(croquis_svg.RAMAS_T_NORTE)
+    else:
+        ramas_ui = ["N", "S", "E", "O"]
     nombres_ramas = {rama: nombres_inferidos[rama] for rama in ramas_ui}
     nombres_extremos = {}
+
+etiqueta_tipo_croquis = ETIQUETAS_TIPO_CROQUIS.get(
+    tipo_croquis, tipo_croquis)
 
 mapeo_final = dict(mapeo_default)
 
@@ -1248,7 +1280,7 @@ with tab_croq:
                         else nombres_ramas)
 
         # ── Croquis hora pico ──
-        st.markdown(f"### 🚦 Croquis {tipo_croquis} — hora pico")
+        st.markdown(f"### 🚦 Croquis {etiqueta_tipo_croquis} — hora pico")
         svg_hp_html, altura_hp = _render_croquis(
             tipo_croquis, volumenes_hp, mapeo_final,
             nombres_ramas, nombres_extremos)
@@ -1259,15 +1291,16 @@ with tab_croq:
             scrolling=False,
         )
         svg_hp = croquis_svg.extraer_svg(svg_hp_html)
-        croquis_reporte.append((f"Croquis {tipo_croquis} — hora pico", svg_hp))
+        titulo_hp = f"Croquis {etiqueta_tipo_croquis} — hora pico"
+        croquis_reporte.append((titulo_hp, svg_hp))
         filas_od_hp = croquis_svg.filas_tabla_od(
             volumenes_hp, mapeo_final, tipo_croquis, etiquetas_od)
-        od_reporte.append((f"Croquis {tipo_croquis} — hora pico", filas_od_hp))
+        od_reporte.append((titulo_hp, filas_od_hp))
         _botones_croquis(f"croquis_{tipo_croquis.lower()}_hora_pico", svg_hp)
         _mostrar_tabla_od(filas_od_hp)
 
         # ── Croquis total ──
-        st.markdown(f"### 🚦 Croquis {tipo_croquis} — total del censo")
+        st.markdown(f"### 🚦 Croquis {etiqueta_tipo_croquis} — total del censo")
         svg_total_html, altura_total = _render_croquis(
             tipo_croquis, volumenes_total, mapeo_final,
             nombres_ramas, nombres_extremos)
@@ -1278,12 +1311,11 @@ with tab_croq:
             scrolling=False,
         )
         svg_total = croquis_svg.extraer_svg(svg_total_html)
-        croquis_reporte.append((f"Croquis {tipo_croquis} — total del censo",
-                                svg_total))
+        titulo_total = f"Croquis {etiqueta_tipo_croquis} — total del censo"
+        croquis_reporte.append((titulo_total, svg_total))
         filas_od_total = croquis_svg.filas_tabla_od(
             volumenes_total, mapeo_final, tipo_croquis, etiquetas_od)
-        od_reporte.append((f"Croquis {tipo_croquis} — total del censo",
-                           filas_od_total))
+        od_reporte.append((titulo_total, filas_od_total))
         _botones_croquis(f"croquis_{tipo_croquis.lower()}_total", svg_total)
         _mostrar_tabla_od(filas_od_total)
 

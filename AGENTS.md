@@ -4,7 +4,7 @@
 Aplicación Python + Streamlit para procesar censos de tránsito vehicular.
 Lee un Excel con 3 hojas (`DATOS`, `MAPA`, `CONFIG`), calcula hora pico,
 FHP, % de pesados, y genera gráficos, reportes (PDF/DOCX) y croquis
-de intersección (cruz, T o ruta) basados en SVG.
+de intersección (cruz, T(sur), T(norte) o ruta) basados en SVG.
 
 **Stack:** Python 3.10+, Streamlit, pandas, openpyxl, plotly, reportlab,
 python-docx, plotly-mirage.
@@ -42,23 +42,24 @@ en Linux, `python3`.
   Incluye `_safe_int()` para blindar contra NaN/None.
 - `reportes.py` — Reportes descargables: PDF (reportlab, DejaVu **embebida**
   desde `fonts/`) y DOCX (python-docx, **Arial**). 
-- `croquis_svg.py` — Renderiza los croquis (cruz, T, ruta) inyectando los
-  valores de cada movimiento en los SVG base. Limpia el SVG antes de
-  inyectarlo (elimina metadata de Inkscape, reemplaza `context-stroke`).
+- `croquis_svg.py` — Renderiza los croquis (cruz, T(sur), T(norte) y ruta)
+  inyectando los valores de cada movimiento en los SVG base. Limpia el SVG
+  antes de inyectarlo (elimina metadata de Inkscape, reemplaza `context-stroke`).
 - `excel_graficos.py` — Gráficos **nativos** (openpyxl: línea, barras, dona)
   para el Excel de salida. `preparar_graficos()` devuelve `hojas_extra`
   (datos en formato ancho) y el callback `al_escribir` que el motor invoca
   con el libro abierto; los gráficos quedan en la hoja `Gráficos` y las
   series usan la paleta elegida en la app. El motor nunca importa openpyxl.
-- `assets/croquis_cruz.svg`, `assets/croquis_T.svg`, `assets/croquis_ruta.svg`
-  — SVGs base con IDs de texto para cada movimiento y caja.
+- `assets/croquis_cruz.svg`, `assets/croquis_T.svg`,
+  `assets/croquis_T_norte.svg`, `assets/croquis_ruta.svg` — SVGs base con
+  IDs de texto para cada movimiento y caja.
 - `crear_ejemplo.py` — Genera los 3 Excel de ejemplo.
 - `mapeador_croquis.html` — Herramienta visual (HTML autocontenido) para
   asignar cada movimiento a una posición del croquis y exportar la hoja
   `MAPA` con la columna `posicion`. Se genera con `generar_mapeador.py`,
   que inyecta los SVG de `assets/` inline.
 - `generar_mapeador.py` — Regenera `mapeador_croquis.html` desde los SVG.
-- `test_croquis.py` — Test manual: genera los 3 HTML de croquis.
+- `test_croquis.py` — Test manual: genera los 4 HTML de croquis.
 - `test_reportes.py` — Test manual: genera `test_reporte.pdf` y `test_reporte.docx`.
 - `fonts/` — DejaVuSans.ttf (+ Bold) para embeber en el PDF.
 
@@ -67,18 +68,22 @@ en `app.py`. Esto permite que Streamlit maneje la UI mientras el motor
 permanece agnóstico.
 
 ## Croquis: tipos e inferencia
-La app soporta 3 tipos de croquis, inferidos automáticamente por cantidad
-de movimientos:
+La app soporta 4 variantes de croquis, inferidas automáticamente por
+cantidad de movimientos y ramas:
 - **Cruz**: 12 movimientos (4 ramas × 3).
-- **T**: 6-9 movimientos (3 ramas × 3, con la rama Norte ausente).
+- **T(sur)**: 6-9 movimientos (3 ramas × 3, con la rama Norte ausente).
+- **T(norte)**: 6-9 movimientos (3 ramas × 3, con la rama Sur ausente).
 - **Ruta**: 2 movimientos (M1 ida, M2 vuelta).
 
-El usuario puede sobrescribir la inferencia con un selector en la app.
+El usuario puede sobrescribir la inferencia con un selector en la app y en
+el mapeador visual.
 
 Mapeo fijo del SVG:
 - **Cruz**: `N_IZQ`, `N_FTE`, `N_DER`, `S_*`, `E_*`, `O_*` (12 posiciones).
-- **T**: `S_IZQ`, `S_FTE`(no), `S_DER`, `O_IZQ`(no), `O_FTE`, `O_DER`,
+- **T(sur)**: `S_IZQ`, `S_FTE`(no), `S_DER`, `O_IZQ`(no), `O_FTE`, `O_DER`,
   `E_IZQ`, `E_FTE`, `E_DER`(no). Slots no válidos = `—`.
+- **T(norte)**: `N_IZQ`, `N_FTE`(no), `N_DER`, `O_IZQ`, `O_FTE`, `O_DER`(no),
+  `E_IZQ`(no), `E_FTE`, `E_DER`. Slots no válidos = `—`.
 - **Ruta**: `M1`, `M2` (2 extremos).
 
 Mapeo personalizado (censos con otros números): la hoja `MAPA` puede traer
@@ -122,7 +127,7 @@ existiendo como herramienta aparte.
   Instalar pytest con `pip install -r requirements-dev.txt`.
 - App: `streamlit run app.py`, subir un `censo_ejemplo_*.xlsx`, procesar.
 - Motor solo: `python procesar_censo3.py censo_ejemplo_cruz.xlsx --verbose`.
-- Croquis: `python test_croquis.py` → genera los 3 HTML.
+- Croquis: `python test_croquis.py` → genera los 4 HTML.
 - Reportes: `python test_reportes.py` → `test_reporte.pdf` / `.docx`.
 - NaN en gráficos: `python test_graficos_nan.py`.
 
